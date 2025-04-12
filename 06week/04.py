@@ -60,16 +60,16 @@ def draw_text(text, x, y, color=(255, 255, 255)):
 
 def draw_chart(prices, dates, offset_x, offset_y, width, height):
     if len(prices) < 2:
-        return
+        return  # 데이터가 부족하면 차트를 그리지 않음
     
-    max_price = max(prices)
-    min_price = min(prices)
+    max_price = float(max(prices))
+    min_price = float(min(prices))
     scale = height / (max_price - min_price) if max_price != min_price else 1
     
     # 차트 라인 그리기
     for i in range(1, len(prices)):
-        y1_val = float(prices[i - 1])  # numpy float32, float64 → 파이썬 float
-        y2_val = float(prices[i])
+        y1_val = prices[i - 1].item() if hasattr(prices[i - 1], "item") else float(prices[i - 1])
+        y2_val = prices[i].item() if hasattr(prices[i], "item") else float(prices[i])
         
         y1 = offset_y + height - (y1_val - min_price) * scale
         y2 = offset_y + height - (y2_val - min_price) * scale
@@ -77,7 +77,8 @@ def draw_chart(prices, dates, offset_x, offset_y, width, height):
         x1 = offset_x + int((i - 1) * width / (len(prices) - 1))
         x2 = offset_x + int(i * width / (len(prices) - 1))
         
-        pygame.draw.line(screen, (0, 255, 0), (x1, int(y1)), (x2, int(y2)), 2)
+        if 0 <= x1 <= WIDTH and 0 <= x2 <= WIDTH and 0 <= y1 <= HEIGHT and 0 <= y2 <= HEIGHT:
+            pygame.draw.line(screen, (0, 255, 0), (x1, int(y1)), (x2, int(y2)), 2)
 
     # y축 가격 눈금
     for i in range(5):
@@ -113,6 +114,12 @@ while running:
 
     # 현재 선택된 주식 데이터 가져오기
     current_ticker = list(TICKERS.keys())[current_ticker_index]
+    if current_ticker not in prices_by_ticker or len(prices_by_ticker[current_ticker]) == 0:
+        draw_text("No data available for the selected stock.", 250, 350, (255, 0, 0))
+        pygame.display.flip()
+        clock.tick(1)
+        continue
+
     current_prices = prices_by_ticker[current_ticker][:time_index + 1]
     current_dates = dates_by_ticker[current_ticker][:time_index + 1]
 
