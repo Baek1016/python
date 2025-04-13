@@ -5,14 +5,20 @@ import datetime
 import sys
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
+import pandas as pd
 
 SAVE_DIR = "saves"
 if not os.path.exists(SAVE_DIR):
     os.makedirs(SAVE_DIR)
 
+CACHE_DIR = "cache"
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
 
 # ----- 1. 데이터 준비: 여러 종목 데이터 다운로드 -----
 TICKERS = {
+    # 미국
     'AAPL': 'Apple',
     'GOOG': 'Google',
     'TSLA': 'Tesla',
@@ -29,8 +35,60 @@ TICKERS = {
     'PYPL': 'PayPal',
     'ADBE': 'Adobe',
     'QCOM': 'Qualcomm',
-    'KO': 'CocaCola'
+    'KO': 'CocaCola',
+    'PEP': 'PepsiCo',
+    'WMT': 'Walmart',
+    'JNJ': 'Johnson & Johnson',
+    'V': 'Visa',
+    'MA': 'Mastercard',
+
+    # 한국
+    '005930.KS': '삼성전자',
+    '000660.KS': 'SK하이닉스',
+    '066570.KS': 'LG전자',
+    '005380.KS': '현대차',
+    '035420.KS': 'NAVER',
+    '035720.KS': '카카오',
+
+    # 대만
+    '2330.TW': 'TSMC',
+
+    # 중국 (홍콩 상장)
+    '9988.HK': 'Alibaba',
+    '0700.HK': 'Tencent',
+    '3690.HK': 'Meituan',
+    '1810.HK': 'Xiaomi',
+
+    # 일본
+    '6758.T': 'Sony',
+    '9984.T': 'SoftBank',
+    '7203.T': 'Toyota',
+
+    # 유럽
+    'AIR.PA': 'Airbus',
+    'OR.PA': 'L’Oreal',
+    'NESN.SW': 'Nestlé',
+    'SIE.DE': 'Siemens',
+    'BMW.DE': 'BMW',
+    'SAP.DE': 'SAP',
+    'ASML.AS': 'ASML',
+    'ULVR.L': 'Unilever',
+    'AZN.L': 'AstraZeneca',
+
+    # 남미 (브라질)
+    'VALE': 'Vale (Brazil)',
+    'PBR': 'Petrobras (Brazil)',
+    'ITUB': 'Itaú Unibanco (Brazil)',
+
+    # 캐나다
+    'SHOP': 'Shopify',
+    'RY': 'Royal Bank of Canada',
+
+    # 인도
+    'INFY': 'Infosys',
+    'RELIANCE.NS': 'Reliance'
 }
+
 
 LAYOUT = {
     "screen": {"width": 1366, "height": 768},
@@ -46,7 +104,7 @@ LAYOUT = {
     },
     "grid": {
         "x": 30, "y_offset_from_bottom": 10,
-        "cols": 4, "rows": 4,
+        "cols": 5, "rows": 10,
         "cell_width": 273, "cell_height": 35
     },
     "portfolio": {
@@ -84,6 +142,11 @@ COMPANY_COLORS = {
     'QCOM': (102, 0, 204),
     'KO': (255, 51, 0)
 }
+menu_new_game_rect = None
+menu_continue_rect = None
+menu_clear_cache_rect = None
+
+
 default_save_file = "autosave.json"
 
 input_mode = None  # "save" or "load"
@@ -109,7 +172,7 @@ stock_scroll_offset = 0
 STOCK_SCROLL_STEP = 20
 STOCK_MAX_SCROLL = 0
 
-
+volumes_by_ticker = {}
 prices_by_ticker = {}
 dates_by_ticker = {}
 first_available_date = {}  # 전역으로 선언해야 모든 함수에서 접근 가능
@@ -118,6 +181,9 @@ rank_history = {ticker: {} for ticker in TICKERS}  # 모든 티커에 대해 날
 
 start_date = "2000-01-01"  # 예: 2000년 1월 1일 부터
 end_date = datetime.datetime.now().strftime("%Y-%m-%d")
+
+
+
 
 current_day_index = 0  # 현재 시뮬레이션 날짜 인덱스
 # 전역 변수 초기화
@@ -128,20 +194,8 @@ time_indices = {ticker: 0 for ticker in TICKERS}
 scroll_offset = 0
 MAX_SCROLL = 0  # 이후 버튼 길이에 따라 계산
 
-
-
-for ticker in TICKERS:
-    stock_data = yf.download(ticker, start=start_date, end=end_date, interval="1d")['Close'].dropna()
-    prices_by_ticker[ticker] = [float(p.item()) for p in stock_data.values]
-    dates_by_ticker[ticker] = [dt.strftime("%y.%m.%d") for dt in stock_data.index]
-
-    first_available_date[ticker] = stock_data.index[0].date()
-
-simulation_date_list = sorted(set().union(*[dates_by_ticker[ticker] for ticker in dates_by_ticker]))
-simulation_date_list = [datetime.datetime.strptime(d, "%y.%m.%d").date() for d in simulation_date_list]
-simulation_date_list.sort() 
-
 # ----- 2. 게임 상태 초기화 -----
+simulation_date_list = []
 game_state = "menu"  # "menu", "playing"
 
 
@@ -192,15 +246,189 @@ time_indices = {ticker: 0 for ticker in TICKERS}
 # ✅ 대체할 새로운 버튼 생성 코드
 button_height = 40  # 버튼 높이 설정
 stock_buttons = []
+# 주식 목록 버튼 정의
+stock_buttons = []
 for i, ticker in enumerate(TICKERS):
     rect = pygame.Rect(50, 100 + i * button_height, 150, button_height)
-    stock_buttons.append((ticker, rect))  # (티커, 위치정보) 튜플로 저장
+    # 기본 rank=0, price=0으로 초기화
+    stock_buttons.append((ticker, rect, 0, 0))
+
 
 # ✅ 스크롤 최대 거리 계산 (아래 공간이 500 픽셀 기준일 때)
 MAX_SCROLL = max(0, len(TICKERS) * button_height - 500)
 
 
 # ----- 4. 함수 정의 -----
+def get_stock_data(ticker):
+    cache_file = os.path.join(CACHE_DIR, f"{ticker}.csv")
+    should_update = True
+
+    # 캐시 검사
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8-sig") as f:
+                first_line = f.readline()
+        except Exception as e:
+            print(f"⚠ 캐시 파일 읽기 오류: {e}")
+            first_line = ""
+    else:
+        first_line = ""
+
+    # ✅ 변경 후: pandas로 미리 열어서 검사
+    if os.path.exists(cache_file):
+        try:
+            df = pd.read_csv(cache_file, encoding="utf-8-sig", nrows=1)
+            if "Close" not in df.columns or "Volume" not in df.columns:
+                print(f"❌ {ticker} 캐시 파일에 'Close' 또는 'Volume' 없음 → 삭제")
+                os.remove(cache_file)
+        except Exception as e:
+            print(f"⚠ 캐시 파일 검사 오류: {e}")
+            os.remove(cache_file)
+
+    else:
+        last_modified = os.path.getmtime(cache_file)
+        now = time.time()
+        if now - last_modified < 86400:
+            try:
+                df = pd.read_csv(
+                    cache_file,
+                    index_col=0,
+                    parse_dates=[0],
+                    date_format="%Y-%m-%d",
+                    encoding="utf-8-sig"
+                )
+                df.index.name = "Date"
+                if df.empty or "Close" not in df.columns or "Volume" not in df.columns:
+                    os.remove(cache_file)
+                    return pd.DataFrame()
+                should_update = False
+                return df
+            except:
+                os.remove(cache_file)
+                return pd.DataFrame()
+
+    # 다운로드 시도
+    if should_update:
+        print(f"📡 캐시 갱신: {ticker}")
+        df = yf.download(ticker, start=start_date, end=end_date, interval="1d", auto_adjust=False, multi_level_index=False)
+
+
+        if not isinstance(df, pd.DataFrame) or df.empty or "Close" not in df.columns or "Volume" not in df.columns:
+            print(f"⚠ {ticker} 데이터 비었거나 'Close' 또는 'Volume' 없음")
+            return pd.DataFrame()
+
+        try:
+            if "Close" not in df.columns or "Volume" not in df.columns:
+                print(f"⚠ {ticker}에 Close 또는 Volume 컬럼 없음")
+                return pd.DataFrame()
+
+            try:
+                close_series = pd.to_numeric(df["Close"].values, errors="coerce")
+                volume_series = pd.to_numeric(df["Volume"].values, errors="coerce")
+            except Exception as e:
+                print(f"❌ {ticker} to_numeric 변환 실패: {e}")
+                return pd.DataFrame()
+
+            df_clean = pd.DataFrame({
+                "Close": close_series,
+                "Volume": volume_series
+            }, index=df.index).dropna()
+
+            df = df_clean  # ✅ 여기 중요! 저장 전에 df에 반영
+        except Exception as e:
+            print(f"❌ {ticker} to_numeric 변환 실패: {e}")
+            return pd.DataFrame()
+
+        df.to_csv(cache_file, index=True, encoding="utf-8-sig")
+        return df
+
+
+
+
+
+
+def download_all_stock_data():
+    global prices_by_ticker, dates_by_ticker, first_available_date, volumes_by_ticker
+
+    results = []
+    for ticker in TICKERS:
+        df = get_stock_data(ticker)
+
+        if df.empty or "Close" not in df.columns or "Volume" not in df.columns:
+            print(f"❌ {ticker} 데이터가 비었거나 필수 컬럼 없음 → 스킵")
+            continue
+
+        df = df.dropna(subset=["Close", "Volume"])
+        if df.empty:
+            continue
+
+        try:
+            prices = [float(p) for p in df['Close']]
+            volumes = [int(v) for v in df['Volume']]
+        except:
+            continue
+        
+        dates = [dt.strftime("%y.%m.%d") for dt in df.index]
+        first_date = df.index[0].date()
+        results.append((ticker, prices, volumes, dates, first_date))
+
+    for ticker, prices, volumes, dates, first_date in results:
+        prices_by_ticker[ticker] = prices
+        volumes_by_ticker[ticker] = volumes  # ✅ 저장
+        dates_by_ticker[ticker] = dates
+        first_available_date[ticker] = first_date
+
+    print("✅ 다운로드 완료된 종목들:", list(prices_by_ticker.keys()))
+
+
+
+
+def init_game():
+    download_all_stock_data()
+    # 화면 초기화
+    screen.fill((0, 0, 0))
+    loading_font = pygame.font.SysFont(None, 36)
+    loading_text = loading_font.render("Downloading stock data...", True, (255, 255, 0))
+    screen.blit(loading_text, (LAYOUT["screen"]["width"] // 2 - 150, LAYOUT["screen"]["height"] // 2))
+    pygame.display.flip()
+
+    all_dates = []
+    for ticker_dates in dates_by_ticker.values():
+        all_dates.extend(ticker_dates)
+
+    if not all_dates:
+        print("❗ 데이터가 부족해서 시뮬레이션 날짜 리스트를 만들 수 없습니다.")
+        alerts.append(("❗ 데이터가 부족합니다. 캐시 삭제 후 다시 시도하세요.", time.time()))
+        return
+
+
+    global simulation_date_list
+    simulation_date_list = sorted(set(all_dates))
+    simulation_date_list = [datetime.datetime.strptime(d, "%y.%m.%d").date() for d in simulation_date_list]
+    simulation_date_list.sort()
+
+    print(f"✅ prices_by_ticker 수: {len(prices_by_ticker)}")
+    print(f"✅ dates_by_ticker 수: {len(dates_by_ticker)}")
+    print(f"✅ simulation_date_list 수: {len(simulation_date_list)}")
+
+
+def clear_cache():
+    deleted = 0
+    for fname in os.listdir(CACHE_DIR):
+        if fname.endswith(".csv"):
+            os.remove(os.path.join(CACHE_DIR, fname))
+            deleted += 1
+    alerts.append((f"🗑️ 캐시 {deleted}개 삭제됨", time.time()))
+
+if __name__ == "__main__":
+    import threading
+    # 💡 데이터를 백그라운드에서 다운받고, 사용자에게 먼저 UI를 보여줌
+    data_thread = threading.Thread(target=init_game)
+    data_thread.start()
+
+
+
+
 def save_game(filename=None):
     try:
         if filename is None:
@@ -382,6 +610,30 @@ def draw_chart(prices, dates):
 
     if len(points) >= 2:
         pygame.draw.lines(screen, (0, 255, 0), False, points, 2)
+        # --- 4. 거래량 막대 그래프 ---
+    volume_offset_y = offset_y + height + 60
+    volume_height = 80
+    volumes = volumes_by_ticker.get(current_ticker, [0]*len(prices))
+    volumes_to_draw = volumes[:len(prices)]
+    draw_volume_bars(volumes_to_draw, offset_x, volume_offset_y, width, volume_height)
+    draw_text("Volume", offset_x, volume_offset_y - 20, (100, 200, 255))
+
+
+def draw_volume_bars(volumes, offset_x, offset_y, width, height):
+    if len(volumes) < 2:
+        return
+
+    max_volume = max(volumes)
+    if max_volume == 0:
+        return
+
+    bar_width = width / len(volumes)
+    for i, volume in enumerate(volumes):
+        x = offset_x + i * bar_width
+        bar_height = (volume / max_volume) * height
+        y = offset_y + height - bar_height
+        pygame.draw.rect(screen, (100, 200, 255), (x, y, bar_width * 0.9, bar_height))
+
 
 
 def draw_portfolio_summary():
@@ -465,7 +717,11 @@ def cash():
 
 def draw_all_companies_grid():
     today = simulation_date_list[current_day_index]
-    visible_companies = [ticker for ticker in TICKERS if first_available_date[ticker] <= today]
+    visible_companies = [
+        ticker for ticker in TICKERS
+        if ticker in first_available_date and first_available_date[ticker] <= today
+    ]
+
 
     visible_companies.sort(key=lambda t: first_available_date[t])
     
@@ -571,12 +827,6 @@ def update_data():
 def update_intraday_data():
     # 최신 1일치 인트라데이 데이터를 가져오는 예제
     global prices_by_ticker, dates_by_ticker
-    for ticker in TICKERS:
-        stock_data = yf.download(ticker, period="1d", interval="1m")['Close'].dropna()
-        prices_by_ticker[ticker] = [float(p) for p in list(stock_data.values)]
-        dates_by_ticker[ticker] = [dt.strftime("%H:%M") for dt in stock_data.index]
-
-        first_available_date[ticker] = stock_data.index[0].date()
 
 def buy_stock(ticker):
     global alerts
@@ -708,7 +958,7 @@ def get_sorted_visible_stocks():
     visible = []
 
     for ticker in TICKERS:
-        if first_available_date[ticker] <= today:
+        if ticker in first_available_date and first_available_date[ticker] <= today:
             quantity = portfolio["stocks"][ticker]["quantity"]
             price_index = min(time_indices[ticker], len(prices_by_ticker[ticker]) - 1)
             current_price = prices_by_ticker[ticker][price_index]
@@ -782,7 +1032,11 @@ def draw_zoomed_chart(prices, dates):
 
 def draw_ui():
     today = simulation_date_list[current_day_index]
-    visible_companies = [ticker for ticker in TICKERS if first_available_date[ticker] <= today]
+    visible_companies = [
+        ticker for ticker in TICKERS
+        if ticker in first_available_date and first_available_date[ticker] <= today
+    ]
+
     draw_stock_list(visible_companies)
     cash()
     draw_alerts()
@@ -807,289 +1061,215 @@ def draw_ui():
     draw_text("← Menu", back_to_menu_rect.x + 10, back_to_menu_rect.y + 5)
 
 def draw_main_menu():
-    screen.fill((20, 20, 20))
+    global menu_new_game_rect, menu_continue_rect, menu_clear_cache_rect
+
+    screen.fill((20, 20, 20))  # ✅ 먼저 화면을 지워주고 나머지 요소 그리기 시작
+
     title = font.render(" stock simulator", True, (255, 255, 0))
     screen.blit(title, (LAYOUT["screen"]["width"] // 2 - 100, 100))
 
-    global menu_new_game_rect, menu_continue_rect
     menu_new_game_rect = pygame.Rect(LAYOUT["screen"]["width"] // 2 - 100, 200, 200, 50)
     menu_continue_rect = pygame.Rect(LAYOUT["screen"]["width"] // 2 - 100, 270, 200, 50)
+    menu_clear_cache_rect = pygame.Rect(LAYOUT["screen"]["width"] // 2 - 100, 340, 200, 50)
 
     pygame.draw.rect(screen, (70, 130, 180), menu_new_game_rect)
     pygame.draw.rect(screen, (100, 100, 100), menu_continue_rect)
+    pygame.draw.rect(screen, (180, 70, 70), menu_clear_cache_rect)
 
     screen.blit(font.render("new game start", True, (255, 255, 255)), (menu_new_game_rect.x + 30, menu_new_game_rect.y + 15))
     screen.blit(font.render("load game", True, (255, 255, 255)), (menu_continue_rect.x + 50, menu_continue_rect.y + 15))
+    screen.blit(font.render("Clear Cache", True, (255, 255, 255)), (menu_clear_cache_rect.x + 40, menu_clear_cache_rect.y + 15))
 
     if input_mode == "load":
-        draw_load_file_buttons()  # 🔥 여기에 명시적으로 강제 추가
+        draw_load_file_buttons()
 
 
 
 
 # ----- 5. 메인 루프 -----
+while not simulation_date_list:
+    time.sleep(0.1)
 running = True
 while running:
     screen.fill((30, 30, 30))
 
     today = simulation_date_list[current_day_index]
-    visible_companies = [ticker for ticker in TICKERS if first_available_date[ticker] <= today]
+    if isinstance(today, str):
+        today = datetime.datetime.strptime(today, "%y.%m.%d").date()
 
-    
+
+    visible_companies = [
+        ticker for ticker in TICKERS
+        if ticker in first_available_date and first_available_date[ticker] <= today
+    ]
+
 
     for event in pygame.event.get():
-        if input_mode == "save" and event.type == pygame.MOUSEBUTTONDOWN:
-            if load_back_button_rect.collidepoint(event.pos):
-                input_mode = None
-                input_text = ""
-                continue
-
-
         if event.type == pygame.QUIT:
             running = False
-    
-        # 🔹 저장 파일 클릭 처리 (load 모드일 때)
-        if input_mode == "load" and event.type == pygame.MOUSEBUTTONDOWN:
-    # 🔹 확대 모드는 load/save 모드에서는 무시
-            if input_mode is None:
-                chart_rect = pygame.Rect(LAYOUT["chart"]["x"], LAYOUT["chart"]["y"], LAYOUT["chart"]["width"], LAYOUT["chart"]["height"])
-                if chart_rect.collidepoint(event.pos):
-                    chart_zoom_mode = True
-                    chart_zoom_scale = 1.0
-                    rel_x = event.pos[0] - chart_rect.x
-                    chart_zoom_center_ratio = rel_x / chart_rect.width
-
-
-            # 🔙 먼저 뒤로가기 버튼부터 체크!
-            if load_back_button_rect.collidepoint(event.pos):
-                            input_mode = None
-                            input_text = ""
-                            continue
-            
-            for fname, load_rect, del_rect in load_file_buttons:
-                if del_rect.collidepoint(event.pos):
-                    try:
-                        os.remove(os.path.join(SAVE_DIR, fname))
-                        alerts.append((f"{fname} 삭제됨", time.time()))
-                        draw_load_file_buttons()  # 목록 새로고침
-                    except Exception as e:
-                        alerts.append((f"삭제 실패: {e}", time.time()))
-                    break
-                
-                elif load_rect.collidepoint(event.pos):
-                    load_game(fname)
-                    input_mode = None
-                    input_text = ""
-                    break
             continue
-            
-            # 저장파일 버튼 체크
-            
-        
-        # 🔹 저장 파일명 입력 처리 (save 모드일 때)
-        if chart_zoom_mode and event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 4:  # 휠 위
-                chart_zoom_scale = max(0.1, chart_zoom_scale - 0.1)
-            elif event.button == 5:  # 휠 아래
-                chart_zoom_scale = min(2.0, chart_zoom_scale + 0.1)
 
-            
-            if event.key == pygame.K_BACKSPACE:
-                input_mode = None
-                input_text = ""
-            if event.key == pygame.K_RETURN: 
-                filename = input_text.strip()
+        if chart_zoom_mode:
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                chart_zoom_mode = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 4:
+                    chart_zoom_scale = max(0.1, chart_zoom_scale - 0.1)
+                elif event.button == 5:
+                    chart_zoom_scale = min(2.0, chart_zoom_scale + 0.1)
+            continue
 
-                # 🔽 파일명이 비어있으면 저장하지 않음
-                if not filename:
-                    alerts.append(("파일명을 입력하세요", time.time()))
-                    continue
-                
-                # 🔽 .json 확장자 없으면 자동 추가
-                if not filename.endswith(".json"):
-                    filename += ".json"
-
-                save_game(filename)
-                input_mode = None
-                input_text = ""
-
-            elif event.key == pygame.K_BACKSPACE:
-                input_text = input_text[:-1]
-            else:
-                input_text += event.unicode
-            continue  # save 모드에서도 다른 이벤트 무시
-        
-        elif event.type == pygame.KEYDOWN:
-            if chart_zoom_mode:
-                if event.key == pygame.K_ESCAPE:
-                    chart_zoom_mode = False
-                continue
-            
-            # 🔽 여기부터 추가해줘 (save 모드에서 키보드 입력 받기)
-            if input_mode == "save":
+        if input_mode == "save":
+            if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_RETURN:
-                    filename = input_text.strip()
-                    if not filename.endswith(".json"):
-                        filename += ".json"
-                    save_game(filename)
+                    save_game(input_text.strip() + ".json")
                     input_mode = None
                     input_text = ""
                 elif event.key == pygame.K_BACKSPACE:
                     input_text = input_text[:-1]
                 else:
                     input_text += event.unicode
-                continue  # 다른 키 이벤트 무시
-
-
-            if chart_zoom_mode:
-                if event.key == pygame.K_ESCAPE:
-                    chart_zoom_mode = False
-                continue
-            
-            # 다른 이름 저장 (Shift + S)
-            if event.key == pygame.K_s:
-                if pygame.key.get_mods() & pygame.KMOD_SHIFT:
-                    input_mode = "save"
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if load_back_button_rect.collidepoint(event.pos):
+                    input_mode = None
                     input_text = ""
-                else:
-                    save_game()
-                continue
+            continue
 
-            
-            # 단순 저장 (S만 눌렀을 때)
-            if event.key == pygame.K_s:
-                save_game()  # default_save_file 사용
-                continue
-            
-            # 일반 키 입력
-            if event.key == pygame.K_s:
+        if game_state == "playing" and event.type == pygame.KEYDOWN:
+            # 🔹 Shift + S → 다른 이름 저장
+            if event.key == pygame.K_s and (event.mod & pygame.KMOD_SHIFT):
                 input_mode = "save"
                 input_text = ""
-            elif event.key == pygame.K_l:
-                input_mode = "load"
-                input_text = ""
+                continue
+            
+            # 🔹 그냥 S → autosave.json 으로 자동 저장
+            elif event.key == pygame.K_s:
+                save_game()
+                continue
 
-    
-        # 🔹 마우스 클릭 처리 (메뉴 or 게임 중일 때)
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-            if game_state == "menu":
-                if menu_new_game_rect.collidepoint(event.pos):
+            # 🔹 L 키 → 저장 파일 불러오기 모드
+            if event.key == pygame.K_l:
+                input_mode = "load"
+                continue
+
+
+
+
+        if input_mode == "load":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if load_back_button_rect.collidepoint(event.pos):
+                    input_mode = None
+                    continue
+                for fname, load_rect, del_rect in load_file_buttons:
+                    if load_rect.collidepoint(event.pos):
+                        load_game(fname)
+                        input_mode = None
+                        break
+                    elif del_rect.collidepoint(event.pos):
+                        os.remove(os.path.join(SAVE_DIR, fname))
+                        draw_load_file_buttons()
+                        alerts.append((f"{fname} 삭제됨", time.time()))
+                        break
+            continue
+
+        if game_state == "menu":
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                if menu_new_game_rect and menu_new_game_rect.collidepoint(event.pos):
                     game_state = "playing"
                     current_day_index = 0
                     portfolio = {
                         'cash': 100000,
                         'stocks': {ticker: {'quantity': 0, 'buy_price': 0} for ticker in TICKERS}
                     }
-                elif menu_continue_rect.collidepoint(event.pos):
+                elif menu_continue_rect and menu_continue_rect.collidepoint(event.pos):
                     input_mode = "load"
-                continue
-
-            if chart_zoom_mode:
-                pressed = pygame.mouse.get_pressed()
-                if event.type == pygame.MOUSEBUTTONDOWN:
-                    if event.button == 4:  # 휠 위
-                        chart_zoom_scale = max(0.1, chart_zoom_scale - 0.1)
-                    elif event.button == 5:  # 휠 아래
-                        chart_zoom_scale = min(2.0, chart_zoom_scale + 0.1)
+                elif menu_clear_cache_rect and menu_clear_cache_rect.collidepoint(event.pos):
+                    clear_cache()
+            continue
 
 
-
-            elif game_state == "playing":
-                if event.button == 4:  # 마우스 휠 위
-                    scroll_offset = max(0, scroll_offset - 20)
-                    portfolio_scroll_offset = max(0, portfolio_scroll_offset - PORTFOLIO_SCROLL_STEP)
-                    stock_scroll_offset = max(0, stock_scroll_offset - STOCK_SCROLL_STEP)
-                elif event.button == 5:  # 마우스 휠 아래
-                    scroll_offset = min(MAX_SCROLL, scroll_offset + 20)
-                    portfolio_scroll_offset = min(PORTFOLIO_MAX_SCROLL, portfolio_scroll_offset + PORTFOLIO_SCROLL_STEP)
-                    stock_scroll_offset = min(STOCK_MAX_SCROLL, stock_scroll_offset + STOCK_SCROLL_STEP)
-    
-                # 매수/매도 버튼 클릭
-                if buy_button_rect.collidepoint(event.pos):
-                    buy_stock(current_ticker)
-                elif sell_button_rect.collidepoint(event.pos):
-                    sell_stock(current_ticker)
-    
-                # 왼쪽 종목 리스트 클릭
-                for i, (ticker, rect, rank, price) in enumerate(stock_buttons):
-                    shifted_rect = pygame.Rect(rect.x, rect.y - scroll_offset, rect.width, rect.height)
-                    if shifted_rect.collidepoint(event.pos):
-                        current_ticker_index = i
-                        current_ticker = ticker
-                        break
-                    
-                # 아래쪽 종목 그리드 클릭
-                for i, (ticker, rect) in enumerate(all_company_buttons):
-                    if rect.collidepoint(event.pos):
-                        current_ticker = ticker
-                        found = False
-                        for j, (tk, _, _, _) in enumerate(stock_buttons):
-                            if tk == ticker:
-                                current_ticker_index = j
-                                found = True
-                                break
-                        if not found:
-                            current_ticker_index = 0
-                        break
+        if game_state == "playing":
+            if event.type == pygame.MOUSEBUTTONDOWN:
                 if back_to_menu_rect.collidepoint(event.pos):
                     game_state = "menu"
                     continue
+                if buy_button_rect.collidepoint(event.pos):
+                    buy_stock(current_ticker)
+                    continue
+                if sell_button_rect.collidepoint(event.pos):
+                    sell_stock(current_ticker)
+                    continue
+                chart_rect = pygame.Rect(LAYOUT["chart"]["x"], LAYOUT["chart"]["y"], LAYOUT["chart"]["width"], LAYOUT["chart"]["height"])
+                if chart_rect.collidepoint(event.pos):
+                    chart_zoom_mode = True
+                    chart_zoom_center_ratio = (event.pos[0] - chart_rect.x) / chart_rect.width
+                    continue
+                for ticker, rect, rank, price in stock_buttons:
+                    shifted_rect = pygame.Rect(rect.x, rect.y - stock_scroll_offset, rect.width, rect.height)
+                    if shifted_rect.collidepoint(event.pos):
+                        current_ticker = ticker
+                        break
+                for ticker, rect in all_company_buttons:
+                    if rect.collidepoint(event.pos):
+                        current_ticker = ticker
+                        break
 
+    stock_buttons.clear()
+    current_prices = []
+    for ticker in visible_companies:
+        index = min(time_indices[ticker], len(prices_by_ticker[ticker]) - 1)
+        current_price = prices_by_ticker[ticker][index]
+        current_prices.append((ticker, current_price))
 
+    current_prices.sort(key=lambda x: x[1], reverse=True)
+    top_10 = current_prices[:10]
 
+    for rank, (ticker, price) in enumerate(top_10, start=1):
+        rect = pygame.Rect(
+            LAYOUT["stock_list"]["x"],
+            LAYOUT["stock_list"]["y_start"] + (len(stock_buttons) * button_height),
+            250,
+            button_height
+        )
+        stock_buttons.append((ticker, rect, rank, price))
 
-    # stock_buttons 갱신
-        stock_buttons.clear()
-        current_prices = []
-        for ticker in visible_companies:
-            index = min(time_indices[ticker], len(prices_by_ticker[ticker]) - 1)
-            current_price = prices_by_ticker[ticker][index]
-            current_prices.append((ticker, current_price))
+    all_company_buttons.clear()
+    total_cells = LAYOUT["grid"]["cols"] * LAYOUT["grid"]["rows"]
+    grid_height = LAYOUT["grid"]["cell_height"] * LAYOUT["grid"]["rows"]
 
-        current_prices.sort(key=lambda x: x[1], reverse=True)
-        top_10 = current_prices[:10]
+    for idx in range(total_cells):
+        col = idx % LAYOUT["grid"]["cols"]
+        row = idx // LAYOUT["grid"]["cols"]
+        x = LAYOUT["grid"]["x"] + col * LAYOUT["grid"]["cell_width"]
+        y = LAYOUT["screen"]["height"] - grid_height - LAYOUT["grid"]["y_offset_from_bottom"] + row * LAYOUT["grid"]["cell_height"]
 
-        for rank, (ticker, price) in enumerate(top_10, start=1):
-            rect = pygame.Rect(
-                LAYOUT["stock_list"]["x"],
-                LAYOUT["stock_list"]["y_start"] + (len(stock_buttons) * button_height),
-                250,
-                button_height
-            )
-            stock_buttons.append((ticker, rect, rank, price))
+        if idx < len(visible_companies):
+            ticker = visible_companies[idx]
+            rect = pygame.Rect(x, y, LAYOUT["grid"]["cell_width"], LAYOUT["grid"]["cell_height"])
+            all_company_buttons.append((ticker, rect))
 
-        # all_company_buttons 갱신
-        all_company_buttons.clear()
-        total_cells = LAYOUT["grid"]["cols"] * LAYOUT["grid"]["rows"]
-        grid_height = LAYOUT["grid"]["cell_height"] * LAYOUT["grid"]["rows"]
+    rank_today = {ticker: rank for rank, (ticker, _) in enumerate(current_prices, start=1)}
+    
+    for ticker in rank_today:
+        if ticker not in rank_history:
+            rank_history[ticker] = {}
+        rank_history[ticker][today] = rank_today[ticker]
 
-        for idx in range(total_cells):
-            col = idx % LAYOUT["grid"]["cols"]
-            row = idx // LAYOUT["grid"]["cols"]
-            x = LAYOUT["grid"]["x"] + col * LAYOUT["grid"]["cell_width"]
-            y = LAYOUT["screen"]["height"] - grid_height - LAYOUT["grid"]["y_offset_from_bottom"] + row * LAYOUT["grid"]["cell_height"]
-
-            if idx < len(visible_companies):
-                ticker = visible_companies[idx]
-                rect = pygame.Rect(x, y, LAYOUT["grid"]["cell_width"], LAYOUT["grid"]["cell_height"])
-                all_company_buttons.append((ticker, rect))
-
-        # 그래프와 순위 업데이트
-        rank_today = {ticker: rank for rank, (ticker, _) in enumerate(current_prices, start=1)}
-        for ticker in rank_today:
-            if ticker not in rank_history:
-                rank_history[ticker] = {}
-            rank_history[ticker][today] = rank_today[ticker]
-
-        # 각 티커 시간 인덱스 진행
-        # ✅ 시뮬레이션 하루씩 진행
+    
     if current_day_index + 1 < len(simulation_date_list):
         current_day_index += 1
+    
         today = simulation_date_list[current_day_index]
     
-        # 각 티커 인덱스도 날짜에 맞게 조정
+        # ✅ 문자열이면 날짜로 바꿔줘야 함!
+        if isinstance(today, str):
+            today = datetime.datetime.strptime(today, "%y.%m.%d").date()
+            simulation_date_list[current_day_index] = today
+    
         for ticker in TICKERS:
-            # 현재 날짜보다 작거나 같은 인덱스를 찾기
+            if ticker not in dates_by_ticker:
+                continue
+            
             for i, d in enumerate(dates_by_ticker[ticker]):
                 d_obj = datetime.datetime.strptime(d, "%y.%m.%d").date()
                 if d_obj > today:
@@ -1122,20 +1302,19 @@ while running:
         continue
 
     # ----- 게임 화면 그리기 -----
+    screen.fill((30, 30, 30))
+
     if chart_zoom_mode:
         draw_zoomed_chart(prices, dates)
     elif input_mode == "save":
         draw_input_box()
     elif input_mode == "load":
-        screen.fill((30, 30, 30))
         draw_load_file_buttons()
+    elif game_state == "menu":
+        draw_main_menu()
     else:
-        screen.fill((30, 30, 30))
-        if game_state == "menu":
-            draw_main_menu()
-        else:
-            draw_ui()
-
+        draw_ui()
 
     pygame.display.flip()
-    clock.tick(30)  # 초당 프레임 제한 (너무 빠르게 돌지 않도록)
+    clock.tick(30)
+
