@@ -143,6 +143,16 @@ COMPANY_COLORS = {
     'QCOM': (102, 0, 204),
     'KO': (255, 51, 0)
 }
+mouse_x = 0
+mouse_y = 0
+
+comparison_scroll_offset_index = 0
+comparison_tickers = []
+comparison_tickers.clear()
+comparison_mode = False  # 선택 모드 on/off
+show_comparison_charts = False
+start_comparison_button_rect = None
+
 menu_new_game_rect = None
 menu_continue_rect = None
 menu_clear_cache_rect = None
@@ -158,6 +168,8 @@ back_to_menu_rect = pygame.Rect(20, 20, 100, 30)
 load_back_button_rect = pygame.Rect(20, 20, 100, 30)
 
 chart_zoom_mode = False
+chart_scroll_offset_index = 0
+comparison_zoom_mode = False  # ✅ 비교 차트 줌 모드
 chart_zoom_scale = 1.0
 chart_zoom_center_ratio = 0.5
 
@@ -367,7 +379,9 @@ def download_all_stock_data():
 def init_game():
     global simulation_date_list
     global game_state
-    global current_ticker 
+    global current_ticker
+    global comparison_tickers, comparison_mode, comparison_zoom_mode, show_comparison_charts, comparison_scroll_offset_index
+
     # ✅ 먼저 로딩 메시지를 보여주고
     screen.fill((0, 0, 0))
     loading_font = pygame.font.SysFont(None, 36)
@@ -431,9 +445,12 @@ def init_game():
                     current_ticker = ticker
                     print(f"✅ 초기 종목 설정: {ticker}, 상장일: {first_available_date[ticker]}")
                     break
-
-
-
+        # 🔧 비교 모드 상태 초기화
+    comparison_tickers.clear()
+    comparison_mode = False
+    comparison_zoom_mode = False
+    show_comparison_charts = False
+    comparison_scroll_offset_index = 0
 
 
 
@@ -531,7 +548,7 @@ def draw_load_file_buttons():
 
     # 🔙 뒤로가기 버튼
     pygame.draw.rect(screen, (150, 150, 150), load_back_button_rect)
-    draw_text("← Menu", load_back_button_rect.x + 10, load_back_button_rect.y + 5)
+    draw_text("Menu", load_back_button_rect.x + 10, load_back_button_rect.y + 5)
 
     save_files = [f for f in os.listdir(SAVE_DIR) if f.endswith(".json")]
     start_y = 160
@@ -611,6 +628,10 @@ def draw_chart(prices, dates):
 
     if not (opens and closes and highs and lows):
         return
+    
+    vols = volumes_by_ticker.get(current_ticker, [])[start_index:current_index + 1]
+    max_volume = max(vols) if vols else 1
+
 
     # 가격 범위 계산은 딱 1번만!
     max_price = max(highs)
@@ -666,44 +687,145 @@ def draw_chart(prices, dates):
         index = int(j * (len(dates_view) - 1) / num_vertical)
         date_label = dates_view[index]
 
-        # 날짜가 datetime.date나 datetime.datetime이 아니면 파싱 시도
-        if isinstance(date_label, datetime.datetime):
-            label = date_label.date().strftime("%y.%m.%d")
-        elif isinstance(date_label, datetime.date):
+        # 날짜 문자열이 아닌 경우도 다루기
+        if isinstance(date_label, (datetime.datetime, datetime.date)):
             label = date_label.strftime("%y.%m.%d")
-        else:
+        elif isinstance(date_label, str):
             try:
-                parsed_date = datetime.datetime.strptime(str(date_label), "%Y-%m-%d")
-                label = parsed_date.strftime("%y.%m.%d")
+                parsed = datetime.datetime.strptime(date_label, "%Y-%m-%d")
+                label = parsed.strftime("%y.%m.%d")
             except:
-                label = str(date_label)[:10]
+                try:
+                    parsed = datetime.datetime.strptime(date_label, "%y.%m.%d")
+                    label = parsed.strftime("%y.%m.%d")
+                except:
+                    label = date_label  # 최악의 경우 그냥 출력
+        else:
+            label = str(date_label)
+
 
 
         draw_text(label, x_line - 25, offset_y + height + 5, (200, 200, 200))
 
-
-    # 선 그래프 (보조)
+        # ✅ 선 그래프 덧그리기 (초록색 선)
     points = []
-    if len(closes) < 2:
-        return  # 🔐 closes가 너무 짧으면 그래프 생략
-
     for i, price in enumerate(closes):
-        x_point = offset_x + i * (width / (len(closes) - 1))
+        x_point = offset_x + i * bar_width
         y_point = offset_y + height - (price - min_price) * scale
         points.append((float(x_point), float(y_point)))
 
     if len(points) >= 2:
-        pygame.draw.lines(screen, (0, 255, 0), False, points, 2)
+        pygame.draw.lines(screen, (0, 255, 0), False, points, 2)  # 초록색 선
 
-    # 거래량
+
+    # 🔵 거래량 그리기
+    volume_height = 100
     volume_offset_y = offset_y + height + 20
-    volume_height = 50
-    volumes = volumes_by_ticker.get(current_ticker, [])
-    if len(volumes) < len(closes):
-        volumes += [0] * (len(closes) - len(volumes))
-    volumes_to_draw = volumes[start_index:current_index + 1]
-    draw_volume_bars(volumes_to_draw, offset_x, volume_offset_y, width, volume_height)
-    draw_text("Volume", offset_x, volume_offset_y - 20, (100, 200, 255))
+
+    if vols and max(vols) > 0:
+        for j, v in enumerate(vols):
+            vol_height = max(3, (v / max_volume) * volume_height)
+            x = offset_x + j * bar_width
+            pygame.draw.rect(screen, (100, 200, 255),
+                             (x, volume_offset_y + volume_height - vol_height, bar_width * 0.8, vol_height))
+        draw_text("Volume", offset_x, volume_offset_y - 20, (100, 200, 255))
+
+
+def draw_comparison_charts_candlestick():
+    offset_x = 80
+    offset_y = 80
+    chart_width = LAYOUT["screen"]["width"] - 160
+    chart_height = 140  # 🔽 줄임
+    volume_height = 50  # 🔽 줄임
+
+    spacing_y = 30
+
+    if not comparison_tickers:
+        return
+
+    for idx, ticker in enumerate(comparison_tickers):
+        start_y = offset_y + idx * (chart_height + volume_height + spacing_y) - comparison_scroll_offset_index
+        close_key = f"{ticker}_Close"
+        open_key = f"{ticker}_Open"
+        high_key = f"{ticker}_High"
+        low_key = f"{ticker}_Low"
+        vols = volumes_by_ticker.get(ticker, [])
+
+        if close_key not in prices_by_ticker:
+            continue
+
+        # 🔄 날짜 기준으로 슬라이싱 범위 조정
+        today = simulation_date_list[current_day_index]
+        date_list = dates_by_ticker[ticker]
+        index = 0
+        for i, d in enumerate(date_list):
+            d_obj = d if isinstance(d, datetime.date) else datetime.datetime.strptime(str(d), "%Y-%m-%d").date()
+            if d_obj > today:
+                break
+            index = i
+
+        closes = prices_by_ticker[close_key][:index + 1]
+        opens = prices_by_ticker[open_key][:index + 1]
+        highs = prices_by_ticker[high_key][:index + 1]
+        lows = prices_by_ticker[low_key][:index + 1]
+        vols = volumes_by_ticker[ticker][:index + 1]
+
+
+        if len(closes) < 2:
+            continue
+
+        max_price = max(highs)
+        min_price = min(lows)
+        price_scale = chart_height / (max_price - min_price + 1)
+        bar_width = chart_width / len(closes)
+        max_volume = max(vols) if vols else 1
+
+        # 📊 캔들 차트 그리기
+        for i in range(len(closes)):
+            o = opens[i]
+            h = highs[i]
+            l = lows[i]
+            c = closes[i]
+            color = (255, 0, 0) if c >= o else (0, 128, 255)
+
+            x = offset_x + i * bar_width
+            y_open = start_y + chart_height - (o - min_price) * price_scale
+            y_close = start_y + chart_height - (c - min_price) * price_scale
+            y_high = start_y + chart_height - (h - min_price) * price_scale
+            y_low = start_y + chart_height - (l - min_price) * price_scale
+
+            pygame.draw.line(screen, color, (x + bar_width / 2, y_high), (x + bar_width / 2, y_low), 1)
+            top = min(y_open, y_close)
+            height = max(abs(y_open - y_close), 1)
+            pygame.draw.rect(screen, color, (x, top, bar_width * 0.8, height))
+
+        # 🔵 거래량 (캔들 루프 밖에서!)
+                # 🔵 거래량 (캔들 루프 밖에서!)
+        if vols and max(vols) > 0:
+            for j, v in enumerate(vols):
+                vol_height = (v / max_volume) * volume_height
+                x = offset_x + j * bar_width
+                pygame.draw.rect(screen, (100, 200, 255),
+                                 (x, start_y + chart_height + volume_height - vol_height, bar_width * 0.8, vol_height))
+
+            draw_text("Volume", offset_x, start_y + chart_height + volume_height + 5, (100, 200, 255))
+
+
+        # 선 그래프
+        points = []
+        for i, price in enumerate(closes):
+            x_point = offset_x + i * bar_width
+            y_point = start_y + chart_height - (price - min_price) * price_scale
+            points.append((float(x_point), float(y_point)))
+
+        if len(points) >= 2:
+            pygame.draw.lines(screen, (0, 255, 0), False, points, 2)
+
+        # 텍스트
+        draw_text("Volume", offset_x, start_y + chart_height + volume_height + 5, (100, 200, 255))
+        draw_text(f"{TICKERS[ticker]} ({ticker})", offset_x, start_y - 20, (255, 255, 0))
+
+
 
 
 def draw_volume_bars(volumes, offset_x, offset_y, width, height):
@@ -720,6 +842,11 @@ def draw_volume_bars(volumes, offset_x, offset_y, width, height):
         bar_height = max(3, (volume / max_volume) * height)
         y = offset_y + height - bar_height
         pygame.draw.rect(screen, (100, 200, 255), (x, y, bar_width * 0.9, bar_height))
+    
+    if not volumes or max(volumes) == 0:
+        print("⚠️ 거래량이 비어있거나 0입니다.")
+        return
+
 
 
 
@@ -804,12 +931,21 @@ def cash():
 
 
 def draw_all_companies_grid():
+    global start_comparison_button_rect
+    global mode_button_rect
+    global start_comparison_button_rect
+    # 비교 모드 진입/종료 버튼 (항상 표시)
+    mode_button_text = " end select mode" if comparison_mode else " start select mode"
+    mode_button_color = (200, 100, 100) if comparison_mode else (100, 200, 100)
+    mode_button_rect = pygame.Rect(LAYOUT["screen"]["width"] - 250, 20, 220, 30)
+    pygame.draw.rect(screen, mode_button_color, mode_button_rect)
+    draw_text(mode_button_text, mode_button_rect.x + 10, mode_button_rect.y + 5)
+
     today = simulation_date_list[current_day_index]
     visible_companies = [
         ticker for ticker in TICKERS
         if ticker in first_available_date and first_available_date[ticker] <= today
     ]
-
 
     visible_companies.sort(key=lambda t: first_available_date[t])
     
@@ -830,17 +966,53 @@ def draw_all_companies_grid():
         col = idx % cols
         row = idx // cols
         x = grid_x + col * cell_width
-        y = grid_y + row * cell_height
+        y = grid_y + row * cell_height - comparison_scroll_offset_index  # ✅ 수정된 줄
 
         rect = pygame.Rect(x, y, cell_width, cell_height)
+
 
         if idx < len(visible_companies):
             ticker = visible_companies[idx]
             pygame.draw.rect(screen, (80, 80, 80), rect, 2)
-            draw_text(f"{TICKERS[ticker]} ({ticker})", x + 5, y + 10)
-            all_company_buttons.append((ticker, rect))
+            draw_text(f"{TICKERS[ticker]} ({ticker})", x + 5, y + 5)
+
+            if comparison_mode:
+                # 선택/해제 버튼 추가
+                button_rect = pygame.Rect(x + cell_width - 70, y + 5, 60, 20)
+                if ticker in comparison_tickers:
+                    pygame.draw.rect(screen, (200, 70, 70), button_rect)
+                    draw_text("Deselect", button_rect.x + 10, button_rect.y + 2)
+                else:
+                    pygame.draw.rect(screen, (70, 180, 70), button_rect)
+                    draw_text("Select", button_rect.x + 10, button_rect.y + 2)
+
+                all_company_buttons.append((ticker, rect, button_rect))  # 버튼 좌표도 추가
+            else:
+                all_company_buttons.append((ticker, rect, None))  # 버튼은 없음
+
+    global start_comparison_button_rect
+    button_width = 200
+    button_height = 30
+    start_button_x = LAYOUT["screen"]["width"] - button_width - 30
+    start_button_y = grid_y - button_height - 10  # 그리드 내부에 위치
+    
+    start_comparison_button_rect = pygame.Rect(start_button_x, start_button_y, button_width, button_height)
+    
+    # 비교 실행 버튼 항상 표시되도록 수정
+    pygame.draw.rect(screen, (80, 80, 80), start_comparison_button_rect)  # 기본 회색 배경
+
+    if comparison_mode:
+        if len(comparison_tickers) >= 1:
+            pygame.draw.rect(screen, (100, 200, 100), start_comparison_button_rect)
         else:
-            pygame.draw.rect(screen, (50, 50, 50), rect, 2)
+            pygame.draw.rect(screen, (120, 120, 120), start_comparison_button_rect)
+        draw_text("선택한 차트 비교 실행", start_button_x + 20, start_button_y + 5)
+    else:
+        draw_text("(비교모드에서만 사용 가능)", start_button_x + 10, start_button_y + 5, (160, 160, 160))
+
+
+
+
 
 
 def draw_stock_list(visible_companies):
@@ -892,7 +1064,7 @@ def draw_input_box():
 
     # 🔙 뒤로가기 버튼
     pygame.draw.rect(screen, (150, 150, 150), load_back_button_rect)
-    draw_text("← Menu", load_back_button_rect.x + 10, load_back_button_rect.y + 5)
+    draw_text("Menu", load_back_button_rect.x + 10, load_back_button_rect.y + 5)
 
 
 
@@ -1011,20 +1183,177 @@ def get_sorted_visible_stocks():
     # 가치 기준 정렬 (내림차순)
     visible.sort(key=lambda x: -x[1])
     return visible
+def draw_zoomed_chart_like_chart():
+    close_key = f"{current_ticker}_Close"
+    if close_key not in prices_by_ticker:
+        return
+
+    prices = prices_by_ticker[close_key]
+    opens = prices_by_ticker[f"{current_ticker}_Open"]
+    highs = prices_by_ticker[f"{current_ticker}_High"]
+    lows = prices_by_ticker[f"{current_ticker}_Low"]
+    closes = prices_by_ticker[f"{current_ticker}_Close"]
+    dates = dates_by_ticker[current_ticker]
+
+    chart_layout = {"x": 80, "y": 80, "width": LAYOUT["screen"]["width"] - 160, "height": 450}
+    offset_x = chart_layout["x"]
+    offset_y = chart_layout["y"]
+    width = chart_layout["width"]
+    height = chart_layout["height"]
+
+    screen.fill((0, 0, 0))
+    global chart_scroll_offset_index
+    current_index = min(time_indices[current_ticker], len(closes) - 1)
+    total_len = current_index + 1
+    view_len = int(total_len * chart_zoom_scale)
+    
+    # ✅ 스크롤 인덱스 범위 제한
+    chart_scroll_offset_index = max(0, min(chart_scroll_offset_index, total_len - view_len))
+    
+    # ✅ start, end를 스크롤 인덱스로 계산
+    start_index = chart_scroll_offset_index
+    end_index = min(total_len, start_index + view_len)
+
+
+    # 슬라이싱
+    dates = dates[start_index:end_index]
+    opens = opens[start_index:end_index]
+    highs = highs[start_index:end_index]
+    lows = lows[start_index:end_index]
+    closes = closes[start_index:end_index]
+    volumes = volumes_by_ticker.get(current_ticker, [])[start_index:end_index]
+
+    dates = dates[:current_index + 1]
+    opens = opens[:current_index + 1]
+    highs = highs[:current_index + 1]
+    lows = lows[:current_index + 1]
+    closes = closes[:current_index + 1]
+
+    if not highs or not lows:
+        draw_text("⚠ 확대할 데이터가 부족합니다.", offset_x, offset_y + height // 2, (255, 100, 100))
+        return
+
+    max_price = max(highs)
+    min_price = min(lows)
+    
+    if max_price == min_price:
+        draw_text("⚠ 가격 변화 없음", offset_x, offset_y + height // 2, (200, 100, 100))
+        return
+
+    scale = height / (max_price - min_price)
+    bar_width = width / len(closes)
+
+    for i in range(len(closes)):
+        o = opens[i]
+        h = highs[i]
+        l = lows[i]
+        c = closes[i]
+
+        color = (255, 0, 0) if c > o else (0, 128, 255)
+
+        x = offset_x + i * bar_width
+        y_open = offset_y + height - (o - min_price) * scale
+        y_close = offset_y + height - (c - min_price) * scale
+        y_high = offset_y + height - (h - min_price) * scale
+        y_low = offset_y + height - (l - min_price) * scale
+
+        pygame.draw.line(screen, color, (x + bar_width / 2, y_high), (x + bar_width / 2, y_low), 1)
+        top = min(y_open, y_close)
+        body_height = max(abs(y_open - y_close), 1)
+        pygame.draw.rect(screen, color, (x, top, bar_width * 0.8, body_height))
+
+    points = []
+    for i, price in enumerate(closes):
+        x_point = offset_x + i * bar_width
+        y_point = offset_y + height - (price - min_price) * scale
+        points.append((float(x_point), float(y_point)))
+
+    if len(points) >= 2:
+        pygame.draw.lines(screen, (0, 255, 0), False, points, 2)
+    # 거래량
+    volume_height = 150
+    volume_offset_y = offset_y + height + 40
+    volumes = volumes_by_ticker.get(current_ticker, [])[:current_index + 1]
+    draw_volume_bars(volumes, offset_x, volume_offset_y, width, volume_height)
+
+
+    draw_text("ESC to exit zoom", offset_x, volume_offset_y + volume_height + 10, (255, 255, 255))
+    draw_text("Volume", offset_x, volume_offset_y - 20, (100, 200, 255))
+
+    # 마우스 위치가 거래량 바 위에 있을 경우 거래량 텍스트 출력
+    bar_width = width / len(volumes)
+    max_volume = max(volumes) if volumes else 1
+    for i, volume in enumerate(volumes):
+        x = offset_x + i * bar_width
+        bar_height = max(3, (volume / max_volume) * volume_height)
+        y = volume_offset_y + volume_height - bar_height
+        bar_rect = pygame.Rect(x, y, bar_width * 0.9, bar_height)
+
+        if bar_rect.collidepoint(mouse_x, mouse_y):
+            draw_text(f"{volume:,}", x, y - 20, (255, 255, 255))
+            break
+
+
+    # Y축 눈금 추가
+    price_range = max_price - min_price
+    num_y_ticks = 5
+    for i in range(num_y_ticks + 1):
+        y = offset_y + i * height / num_y_ticks
+        price_val = max_price - i * (price_range / num_y_ticks)
+        pygame.draw.line(screen, (60, 60, 60), (offset_x, y), (offset_x + width, y), 1)
+        draw_text(f"${price_val:.2f}", offset_x - 60, y - 10, (200, 200, 200))
+
+        num_x_ticks = 6
+    for i in range(num_x_ticks):
+        x = offset_x + i * width / (num_x_ticks - 1)
+        idx = int(i * (len(dates) - 1) / (num_x_ticks - 1))
+        if isinstance(dates[idx], datetime.date):
+            label = dates[idx].strftime("%y.%m.%d")
+        elif isinstance(dates[idx], str):
+            label = dates[idx][:10]
+        else:
+            label = str(dates[idx])
+        pygame.draw.line(screen, (60, 60, 60), (x, offset_y), (x, offset_y + height), 1)
+        draw_text(label, x - 25, offset_y + height + 5, (200, 200, 200))
+
+        # 🔄 확대 차트 위에 UI 요소도 함께 그리기
+    draw_alerts()
+    cash()
+    draw_total_profit()
+
+    if show_comparison_charts:
+        draw_comparison_charts_candlestick()
+
+    # 뒤로가기 버튼도 표시
+    pygame.draw.rect(screen, (150, 150, 150), back_to_menu_rect)
+    draw_text("← Menu", back_to_menu_rect.x + 10, back_to_menu_rect.y + 5)
+
+    if comparison_mode:
+        pygame.draw.rect(screen, (200, 100, 100), mode_button_rect)
+        draw_text(" end select mode", mode_button_rect.x + 10, mode_button_rect.y + 5)
+    else:
+        pygame.draw.rect(screen, (100, 200, 100), mode_button_rect)
+        draw_text(" start select mode", mode_button_rect.x + 10, mode_button_rect.y + 5)
+
+    if comparison_mode and not chart_zoom_mode:
+        draw_all_companies_grid()
+
+
+
+
 
 def draw_zoomed_chart(opens, highs, lows, closes, dates):
     screen.fill((0, 0, 0))
+
     offset_x, offset_y = 80, 80
     width = LAYOUT["screen"]["width"] - 160
     height = 400
 
     total_len = time_indices[current_ticker] + 1
     view_len = int(total_len * chart_zoom_scale)
-    total_len = len(closes)
     center_index = time_indices[current_ticker]
     start = max(0, center_index - view_len // 2)
     end = min(total_len, start + view_len)
-
 
     opens_view = opens[start:end]
     highs_view = highs[start:end]
@@ -1037,77 +1366,71 @@ def draw_zoomed_chart(opens, highs, lows, closes, dates):
 
     max_price = max(highs_view)
     min_price = min(lows_view)
-
-    if max_price == min_price:
-        draw_text("⚠ 가격 변화 없음 (확대)", offset_x + 100, offset_y + height // 2, (255, 100, 100))
-        return
-
     scale = height / (max_price - min_price)
     bar_width = width / len(closes_view)
 
-    # 🟥🟦 캔들 차트
+    # 🔴 캔들 차트
     for i in range(len(closes_view)):
-        o = opens_view[i]
-        h = highs_view[i]
-        l = lows_view[i]
-        c = closes_view[i]
-
+        o, h, l, c = opens_view[i], highs_view[i], lows_view[i], closes_view[i]
         color = (255, 0, 0) if c > o else (0, 128, 255)
-
         x = offset_x + i * bar_width
         y_open = offset_y + height - (o - min_price) * scale
         y_close = offset_y + height - (c - min_price) * scale
         y_high = offset_y + height - (h - min_price) * scale
         y_low = offset_y + height - (l - min_price) * scale
 
-        # 꼬리 선
         pygame.draw.line(screen, color, (x + bar_width / 2, y_high), (x + bar_width / 2, y_low), 1)
-
-        # 몸통
         top = min(y_open, y_close)
         body_height = max(abs(y_open - y_close), 1)
         pygame.draw.rect(screen, color, (x, top, bar_width * 0.8, body_height))
 
-    # 🔡 X축 날짜 라벨
+    # 🟢 선 그래프
+    points = []
+    for i, price in enumerate(closes_view):
+        x = offset_x + i * bar_width
+        y = offset_y + height - (price - min_price) * scale
+        points.append((x, y))
+    if len(points) >= 2:
+        pygame.draw.lines(screen, (0, 255, 0), False, points, 2)
+
+    # 🔵 거래량
+    volume_offset_y = offset_y + height + 60
+    volume_height = 120
+    volumes = volumes_by_ticker.get(current_ticker, [])
+    if len(volumes) < end:
+        volumes += [0] * (end - len(volumes))
+    volumes_view = volumes[start:end]
+    draw_volume_bars(volumes_view, offset_x, volume_offset_y, width, volume_height)
+    draw_text("Volume", offset_x, volume_offset_y - 20, (100, 200, 255))
+
+    # 🔡 X축
     for i in range(6):
         x_tick = offset_x + i * width / 5
         idx = int(i * (len(dates_view) - 1) / 5)
-        pygame.draw.line(screen, (60, 60, 60), (x_tick, offset_y), (x_tick, offset_y + height))
-        # 날짜가 datetime.date 타입인지 먼저 확인
         label_date = dates_view[idx]
         if isinstance(label_date, str):
             label = label_date[:7]
         else:
             label = label_date.strftime("%y.%m.%d")[:7]
-
+        pygame.draw.line(screen, (60, 60, 60), (x_tick, offset_y), (x_tick, offset_y + height))
         draw_text(label, x_tick - 25, offset_y + height + 5, (200, 200, 200))
 
-
-    # 🔢 Y축 가격 눈금
+    # 🔢 Y축
     for i in range(5):
         y = offset_y + i * height / 4
         val = max_price - i * (max_price - min_price) / 4
         pygame.draw.line(screen, (60, 60, 60), (offset_x, y), (offset_x + width, y))
         draw_text(f"${val:.2f}", offset_x - 60, y - 10, (200, 200, 200))
 
-    draw_text("ESC to exit zoom", offset_x, offset_y + height + 40, (255, 255, 255))
-
-    # 📊 거래량 그리기
-    volume_offset_y = offset_y + height + 60
-    volume_height = 80
-    volumes = volumes_by_ticker.get(current_ticker, [])
-    if len(volumes) < end:
-        volumes += [0] * (end - len(volumes))  # 부족한 경우 채워줌
-    volumes_view = volumes[start:end]  # ✅ 정확한 범위로 슬라이싱
-
-
-    draw_volume_bars(volumes_view, offset_x, volume_offset_y, width, volume_height)
-    draw_text("Volume", offset_x, volume_offset_y - 20, (100, 200, 255))
+    draw_text("ESC to exit zoom", offset_x, volume_offset_y + volume_height + 10, (255, 255, 255))
 
 
 
 
 def draw_ui():
+    global start_comparison_button_rect  # ✅ 이 줄 추가
+    start_comparison_button_rect = None  # 매 프레임마다 초기화
+
     today = simulation_date_list[current_day_index]
     visible_companies = [
         ticker for ticker in TICKERS
@@ -1120,21 +1443,79 @@ def draw_ui():
     y_after_profit = draw_portfolio_summary()
     global buy_button_rect, sell_button_rect
     buy_button_rect, sell_button_rect = draw_buttons(y_after_profit)
-    draw_all_companies_grid()
 
     close_key = f"{current_ticker}_Close"
     if close_key in prices_by_ticker:
         current_index = min(time_indices[current_ticker], len(prices_by_ticker[close_key]) - 1)
         prices = prices_by_ticker[close_key][:max(2, current_index + 1)]
         dates = dates_by_ticker[current_ticker][:max(2, current_index + 1)]
+
+        if show_comparison_charts:
+            draw_comparison_charts_candlestick()
+
         draw_chart(prices, dates)
+
+        # 🔧 확대 모드일 때 그리드는 안 보이게
+        if not chart_zoom_mode:
+            draw_all_companies_grid()
+
+
     
-        print(f"📈 current_ticker: {current_ticker}, prices 길이: {len(prices)}, dates 길이: {len(dates)}")
+        print(f"current_ticker: {current_ticker}, prices 길이: {len(prices)}, dates 길이: {len(dates)}")
 
     
     # 🟡 뒤로가기 버튼
     pygame.draw.rect(screen, (150, 150, 150), back_to_menu_rect)
     draw_text("← Menu", back_to_menu_rect.x + 10, back_to_menu_rect.y + 5)
+    # draw_ui() 함수 내 draw_comparison_charts() 호출 부분을 아래처럼 수정
+
+
+
+def draw_comparison_charts():
+    offset_x = 80
+    offset_y = 80  # 기존 차트 아래 영역
+    width = LAYOUT["screen"]["width"] - 160
+    height = 250  # 높이 크게
+
+    if len(comparison_tickers) == 0:
+        return
+
+    pygame.draw.rect(screen, (20, 20, 20), (offset_x, offset_y, width, height))  # 배경
+
+    # 공통 스케일 구하기
+    all_prices = []
+    for ticker in comparison_tickers:
+        closes = prices_by_ticker.get(f"{ticker}_Close", [])
+        index = min(time_indices[ticker], len(closes) - 1)
+        all_prices.extend(closes[:index+1])
+
+    if not all_prices:
+        return
+
+    max_price = max(all_prices)
+    min_price = min(all_prices)
+    scale = height / (max_price - min_price + 1)
+
+    for i, ticker in enumerate(comparison_tickers):
+        closes = prices_by_ticker[f"{ticker}_Close"]
+        index = min(time_indices[ticker], len(closes) - 1)
+        prices = closes[:index+1]
+
+        if len(prices) < 2:
+            continue
+
+        color = COMPANY_COLORS.get(ticker, (255, 255, 255))
+        points = []
+
+        for j, p in enumerate(prices):
+            x = offset_x + j * (width / len(prices))
+            y = offset_y + height - (p - min_price) * scale
+            points.append((x, y))
+
+        if len(points) >= 2:
+            pygame.draw.lines(screen, color, False, points, 2)
+            draw_text(ticker, int(points[-1][0]), int(points[-1][1]) - 15, color)
+
 
 def draw_main_menu():
     global menu_new_game_rect, menu_continue_rect, menu_clear_cache_rect
@@ -1159,55 +1540,189 @@ def draw_main_menu():
     if input_mode == "load":
         draw_load_file_buttons()
 
+def draw_comparison_zoom_screen():
+    screen.fill((0, 0, 0))  # 배경 초기화
+
+    count = len(comparison_tickers)
+    if count == 0:
+        return
+
+    if count == 1:
+        rows, cols = 1, 1
+        width = LAYOUT["screen"]["width"] - 80
+        height = LAYOUT["screen"]["height"] - 150  # 전체 공간 사용
+    else:
+        if count == 2:
+            rows, cols = 2, 1
+        else:
+            rows, cols = 2, 2
+
+        width = LAYOUT["screen"]["width"] // cols
+        height = (LAYOUT["screen"]["height"] - 150) // rows
 
 
-# ----- 5. 메인 루프 -----
+    for i, ticker in enumerate(comparison_tickers):
+        row = i // cols
+        col = i % cols
+        offset_x = col * width + 20
+        offset_y = row * height + 80
+
+        # 보여줄 데이터 범위 설정
+        view_len = 100
+        start = comparison_scroll_offset_index
+
+        # ✅ 진행된 날짜까지만 보여주도록 인덱스 제한
+        time_index = time_indices.get(ticker, 0)
+        end = min(start + view_len, time_index + 1)
+
+
+        # 데이터 추출
+        opens = prices_by_ticker.get(f"{ticker}_Open", [])[start:end]
+        highs = prices_by_ticker.get(f"{ticker}_High", [])[start:end]
+        lows = prices_by_ticker.get(f"{ticker}_Low", [])[start:end]
+        closes = prices_by_ticker.get(f"{ticker}_Close", [])[start:end]
+        volumes = volumes_by_ticker.get(ticker, [])[start:end]
+        dates = dates_by_ticker.get(ticker, [])[start:end]
+
+
+        if not closes or not highs or not lows:
+            continue
+
+        # 가격 스케일링
+        max_price = max(highs)
+        min_price = min(lows)
+        price_scale = height / (max_price - min_price + 1)
+        bar_width = width / max(1, len(closes))
+
+        # 🔵 거래량
+        volume_height = 50
+        volume_offset_y = offset_y + height + 10
+        max_volume = max(volumes) if volumes else 1
+        # 🔵 거래량
+        for j, v in enumerate(volumes):
+            vol_height = (v / max_volume) * volume_height
+            x = offset_x + j * bar_width
+            y = volume_offset_y + volume_height - vol_height
+            volume_rect = pygame.Rect(x, y, bar_width * 0.8, vol_height)
+            pygame.draw.rect(screen, (100, 200, 255), volume_rect)
+
+            # 🔍 마우스 올렸을 때 거래량 텍스트 표시
+            if volume_rect.collidepoint(mouse_x, mouse_y):
+                draw_text(f"{v:,}", int(x), int(y) - 20, (255, 255, 255))
+
+
+        # 📈 캔들 차트
+        for j in range(len(closes)):
+            o = opens[j]
+            h = highs[j]
+            l = lows[j]
+            c = closes[j]
+            color = (255, 0, 0) if c >= o else (0, 128, 255)
+
+            x = offset_x + j * bar_width
+            y_open = offset_y + height - (o - min_price) * price_scale
+            y_close = offset_y + height - (c - min_price) * price_scale
+            y_high = offset_y + height - (h - min_price) * price_scale
+            y_low = offset_y + height - (l - min_price) * price_scale
+
+            pygame.draw.line(screen, color, (x + bar_width / 2, y_high), (x + bar_width / 2, y_low), 1)
+            top = min(y_open, y_close)
+            body_height = max(abs(y_open - y_close), 1)
+            pygame.draw.rect(screen, color, (x, top, bar_width * 0.8, body_height))
+
+        # 🔢 Y축 눈금
+        for k in range(4):
+            y = offset_y + k * height / 3
+            val = max_price - k * (max_price - min_price) / 3
+            pygame.draw.line(screen, (60, 60, 60), (offset_x, y), (offset_x + width, y))
+            draw_text(f"${val:.2f}", offset_x - 60, y - 10, (200, 200, 200))
+
+        # 📅 X축 날짜
+        for k in range(4):
+            x_tick = offset_x + k * width / 3
+            if len(dates) > 0:
+                idx = int(k * (len(dates) - 1) / 3)
+                d = dates[idx]
+                if isinstance(d, datetime.date):
+                    label = d.strftime("%y.%m.%d")
+                else:
+                    label = str(d)
+                pygame.draw.line(screen, (60, 60, 60), (x_tick, offset_y), (x_tick, offset_y + height))
+                draw_text(label, x_tick - 25, offset_y + height + 5, (200, 200, 200))
+
+        draw_text(f"{TICKERS[ticker]} ({ticker})", offset_x, offset_y - 25, (255, 255, 0))
+
+    # 🔙 ESC 안내
+    draw_text("ESC to exit comparison mode", 80, 20, (255, 255, 255))
+
+
 def main_loop():
     if not simulation_date_list:
         print("❌ simulation_date_list가 비어있습니다. 게임을 시작할 수 없습니다.")
         return
 
+    global comparison_scroll_offset_index
+    global chart_scroll_offset_index
+    global comparison_mode, show_comparison_charts
     global current_day_index, current_ticker
     global chart_zoom_mode, chart_zoom_scale, chart_zoom_center_ratio
     global input_mode, input_text, load_file_buttons
     global game_state
+    global comparison_zoom_mode
     last_day_update_time = time.time()
-
 
     running = True
     while running:
         screen.fill((30, 30, 30))
 
+        global mouse_x, mouse_y
+        mouse_x, mouse_y = pygame.mouse.get_pos()
+
         today = simulation_date_list[current_day_index]
         if isinstance(today, str):
             today = datetime.datetime.strptime(today, "%y.%m.%d").date()
-
 
         visible_companies = [
             ticker for ticker in TICKERS
             if ticker in first_available_date and first_available_date[ticker] <= today
         ]
 
-
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
                 continue
 
+            # 확대 차트 모드
             if chart_zoom_mode:
                 if event.type == pygame.KEYDOWN:
-                    print("📥 키 입력 감지됨 (zoom mode)")
                     if event.key == pygame.K_ESCAPE:
                         print("🔙 ESC 입력 → chart_zoom_mode 종료")
                         chart_zoom_mode = False
-
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     if event.button == 4:
-                        chart_zoom_scale = max(0.1, chart_zoom_scale - 0.1)
+                        chart_scroll_offset_index = max(0, chart_scroll_offset_index - 10)
                     elif event.button == 5:
-                        chart_zoom_scale = min(2.0, chart_zoom_scale + 0.1)
+                        chart_scroll_offset_index += 10
                 continue
 
+            # 비교 차트 줌 모드
+            if comparison_zoom_mode:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_LEFT:
+                        comparison_scroll_offset_index = max(0, comparison_scroll_offset_index - 10)
+                    elif event.key == pygame.K_RIGHT:
+                        comparison_scroll_offset_index += 10
+                    elif event.key == pygame.K_ESCAPE:
+                        print("🔙 ESC 입력 → comparison_zoom_mode 종료")
+                        comparison_zoom_mode = False
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 4:
+                        comparison_scroll_offset_index = max(0, comparison_scroll_offset_index - 10)
+                    elif event.button == 5:
+                        comparison_scroll_offset_index += 10
+                continue
+
+            # 저장 입력 모드
             if input_mode == "save":
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_RETURN:
@@ -1224,26 +1739,7 @@ def main_loop():
                         input_text = ""
                 continue
 
-            if game_state == "playing" and event.type == pygame.KEYDOWN:
-                # 🔹 Shift + S → 다른 이름 저장
-                if event.key == pygame.K_s and (event.mod & pygame.KMOD_SHIFT):
-                    input_mode = "save"
-                    input_text = ""
-                    continue
-                
-                # 🔹 그냥 S → autosave.json 으로 자동 저장
-                elif event.key == pygame.K_s:
-                    save_game()
-                    continue
-
-                # 🔹 L 키 → 저장 파일 불러오기 모드
-                if event.key == pygame.K_l:
-                    input_mode = "load"
-                    continue
-
-
-
-
+            # 불러오기 모드
             if input_mode == "load":
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if load_back_button_rect.collidepoint(event.pos):
@@ -1261,6 +1757,7 @@ def main_loop():
                             break
                 continue
 
+            # 메뉴 화면
             if game_state == "menu":
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if menu_new_game_rect and menu_new_game_rect.collidepoint(event.pos):
@@ -1276,77 +1773,83 @@ def main_loop():
                         clear_cache()
                 continue
 
-
+            # 게임 플레이 화면
             if game_state == "playing":
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_s and (event.mod & pygame.KMOD_SHIFT):
+                        input_mode = "save"
+                        input_text = ""
+                        continue
+                    elif event.key == pygame.K_s:
+                        save_game()
+                        continue
+                    elif event.key == pygame.K_l:
+                        input_mode = "load"
+                        continue
+
                 if event.type == pygame.MOUSEBUTTONDOWN:
+                    if 'mode_button_rect' in globals() and mode_button_rect.collidepoint(event.pos):
+                        comparison_mode = not comparison_mode
+                        if not comparison_mode:
+                            comparison_tickers.clear()
+                            show_comparison_charts = False
+                        continue
+
+                    if start_comparison_button_rect and start_comparison_button_rect.collidepoint(event.pos):
+                        print("🖱️ 실행 버튼 클릭됨")  # ✅ 디버깅 출력
+                        print("📊 선택된 종목:", comparison_tickers)
+                        if comparison_mode:
+                            if len(comparison_tickers) == 1:
+                                current_ticker = comparison_tickers[0]
+                                chart_zoom_mode = True
+                                chart_scroll_offset_index = 0
+                                print(f"✅ 단독 차트 확대 모드 진입: {current_ticker}")
+                            elif len(comparison_tickers) >= 2:
+                                comparison_zoom_mode = True
+                                print("✅ 비교 차트 줌 모드 진입!")
+                            else:
+                                alerts.append(("⚠ 최소 1개 이상 선택해야 합니다.", time.time()))
+                        continue
+
+                    if comparison_tickers:
+                        exit_rect = pygame.Rect(LAYOUT["screen"]["width"] - 150, 20, 120, 30)
+                        if exit_rect.collidepoint(event.pos):
+                            comparison_tickers.clear()
+                            continue
+
                     if back_to_menu_rect.collidepoint(event.pos):
                         game_state = "menu"
                         continue
+
                     if buy_button_rect.collidepoint(event.pos):
                         buy_stock(current_ticker)
                         continue
+
                     if sell_button_rect.collidepoint(event.pos):
                         sell_stock(current_ticker)
                         continue
+
                     chart_rect = pygame.Rect(LAYOUT["chart"]["x"], LAYOUT["chart"]["y"], LAYOUT["chart"]["width"], LAYOUT["chart"]["height"])
                     if chart_rect.collidepoint(event.pos):
                         chart_zoom_mode = True
                         chart_zoom_center_ratio = (event.pos[0] - chart_rect.x) / chart_rect.width
                         continue
-                    for ticker, rect, rank, price in stock_buttons:
-                        shifted_rect = pygame.Rect(rect.x, rect.y - stock_scroll_offset, rect.width, rect.height)
-                        if shifted_rect.collidepoint(event.pos):
+
+                    for ticker, main_rect, select_rect in all_company_buttons:
+                        if comparison_mode:
+                            if select_rect and select_rect.collidepoint(event.pos):
+                                if ticker in comparison_tickers:
+                                    comparison_tickers.remove(ticker)
+                                elif len(comparison_tickers) < 4:
+                                    comparison_tickers.append(ticker)
+                                print(f"✅ 선택 상태 변경됨: {ticker}, 현재 비교 리스트: {comparison_tickers}")
+                                break
+                        if main_rect.collidepoint(event.pos):
                             current_ticker = ticker
-                            break
-                    for ticker, rect in all_company_buttons:
-                        if rect.collidepoint(event.pos):
-                            current_ticker = ticker
+                            print(f"📈 현재 종목 변경됨: {ticker}")
                             break
 
-        stock_buttons.clear()
-        current_prices = []
-        for ticker in visible_companies:
-            index = min(time_indices[ticker], len(prices_by_ticker[f"{ticker}_Close"]) - 1)
-            current_price = prices_by_ticker[f"{ticker}_Close"][index]
-
-            current_prices.append((ticker, current_price))
-
-        current_prices.sort(key=lambda x: x[1], reverse=True)
-        top_10 = current_prices[:10]
-
-        for rank, (ticker, price) in enumerate(top_10, start=1):
-            rect = pygame.Rect(
-                LAYOUT["stock_list"]["x"],
-                LAYOUT["stock_list"]["y_start"] + (len(stock_buttons) * button_height),
-                250,
-                button_height
-            )
-            stock_buttons.append((ticker, rect, rank, price))
-
-        all_company_buttons.clear()
-        total_cells = LAYOUT["grid"]["cols"] * LAYOUT["grid"]["rows"]
-        grid_height = LAYOUT["grid"]["cell_height"] * LAYOUT["grid"]["rows"]
-
-        for idx in range(total_cells):
-            col = idx % LAYOUT["grid"]["cols"]
-            row = idx // LAYOUT["grid"]["cols"]
-            x = LAYOUT["grid"]["x"] + col * LAYOUT["grid"]["cell_width"]
-            y = LAYOUT["screen"]["height"] - grid_height - LAYOUT["grid"]["y_offset_from_bottom"] + row * LAYOUT["grid"]["cell_height"]
-
-            if idx < len(visible_companies):
-                ticker = visible_companies[idx]
-                rect = pygame.Rect(x, y, LAYOUT["grid"]["cell_width"], LAYOUT["grid"]["cell_height"])
-                all_company_buttons.append((ticker, rect))
-
-        rank_today = {ticker: rank for rank, (ticker, _) in enumerate(current_prices, start=1)}
-
-        for ticker in rank_today:
-            if ticker not in rank_history:
-                rank_history[ticker] = {}
-            rank_history[ticker][today] = rank_today[ticker]
-
-
-        # 하루가 3분마다 진행되도록 조정
+        # 날짜 및 데이터 업데이트
         if time.time() - last_day_update_time > 10:
             if current_day_index + 1 < len(simulation_date_list):
                 current_day_index += 1
@@ -1355,73 +1858,22 @@ def main_loop():
             else:
                 alerts.append(("⏱️ 시뮬레이션 종료 - 더 이상 진행할 날짜가 없습니다.", time.time()))
 
-        # ✅ 날짜 진행 후, 각 ticker의 time_indices를 갱신
         for ticker in TICKERS:
             if ticker not in dates_by_ticker:
                 continue
-            
             for i, d in enumerate(dates_by_ticker[ticker]):
                 d_obj = d if isinstance(d, datetime.date) else datetime.datetime.strptime(d, "%y.%m.%d").date()
-
                 if d_obj > today:
                     break
                 time_indices[ticker] = i
 
-            # 필요 시 아래처럼 menu로 돌아가거나, 멈춤 처리도 가능
-            # game_state = "menu"
-            # running = False
-
-
-            # ✅ 문자열이면 날짜로 바꿔줘야 함!
-            if isinstance(today, str):
-                today = datetime.datetime.strptime(today, "%y.%m.%d").date()
-                simulation_date_list[current_day_index] = today
-
-            for ticker in TICKERS:
-                if ticker not in dates_by_ticker:
-                    continue
-                
-                for i, d in enumerate(dates_by_ticker[ticker]):
-                    d_obj = d if isinstance(d, datetime.date) else datetime.datetime.strptime(d, "%y.%m.%d").date()
-                    if d_obj > today:
-                        break
-                    time_indices[ticker] = i
-
-        # ----- 게임 화면 그리기 -----
-
-        # 🟢 현재 선택된 티커 기준으로 prices, dates 준비
-        # 항상 current_ticker를 먼저 안전하게 정의
-        # current_ticker_index는 이제 무시하고,
-        # current_ticker 값만을 기반으로 처리
-        if current_ticker not in prices_by_ticker:
-            prices = []
-            dates = []
-        else:
-            current_index = min(time_indices[current_ticker], len(prices_by_ticker[current_ticker]) - 1)
-            prices = prices_by_ticker[current_ticker][:max(2, current_index + 1)]
-            dates = dates_by_ticker[current_ticker][:max(2, current_index + 1)]
-
-
-
-        # 🟢 해당 종목이 아직 상장 전이면 스킵
-        if simulation_date_list[current_day_index] < first_available_date[current_ticker]:
-            pygame.display.flip()
-            clock.tick(5)
-            if current_day_index + 1 < len(simulation_date_list):
-                current_day_index += 1
-            continue
-
-        # ----- 게임 화면 그리기 -----
+        # 화면 그리기
         screen.fill((30, 30, 30))
 
         if chart_zoom_mode:
-            draw_zoomed_chart(
-                prices_by_ticker[f"{current_ticker}_Open"],
-                prices_by_ticker[f"{current_ticker}_High"],
-                prices_by_ticker[f"{current_ticker}_Low"],
-                prices_by_ticker[f"{current_ticker}_Close"],
-                dates_by_ticker[current_ticker]
-            )
+            draw_zoomed_chart_like_chart()
+        elif comparison_zoom_mode:
+            draw_comparison_zoom_screen()
         elif input_mode == "save":
             draw_input_box()
         elif input_mode == "load":
@@ -1433,6 +1885,9 @@ def main_loop():
 
         pygame.display.flip()
         clock.tick(30)
+
+
+
 
 if __name__ == "__main__":
     init_game()
