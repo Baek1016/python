@@ -1,0 +1,5 @@
+5_10agentek@naver.com
+
+클래스 안에서 사용되는 함수를 method
+
+함수에서 def를 우선 선언하고 사용한다.
