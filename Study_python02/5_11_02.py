@@ -181,8 +181,20 @@
 import random
 def lotto_func():
     # 로또 번호를 생성하는 함수
-    lotto_numbers = random.sample(range(1, 46), 6)  # 1부터 45까지의 숫자 중에서 6개를 랜덤으로 선택
+    lotto_numbers = random.randrange(1, 46)  # 1부터 45까지의 숫자 중에서 6개를 랜덤으로 선택
     return lotto_numbers
 
-a = lotto_func()
-print("로또 번호:", a)
+lotto=[]
+num = 0
+
+while True:
+    a = lotto_func()
+
+    # 중복된 번호가 없도록 체크    
+    if a not in lotto:
+        lotto.append(a)
+    
+    if len(lotto) == 6:
+        break
+
+print("로또 번호:", lotto)
