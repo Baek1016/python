@@ -52,12 +52,12 @@ TICKERS = {
     '035720.KS': '카카오',
 
     # 대만
-    '2330.TW': 'TSMC',
+    # '2330.TW': 'TSMC',
 
     # 중국 (홍콩 상장)
     '9988.HK': 'Alibaba',
     '0700.HK': 'Tencent',
-    '3690.HK': 'Meituan',
+    # '3690.HK': 'Meituan',
     '1810.HK': 'Xiaomi',
 
     # 일본
@@ -68,25 +68,25 @@ TICKERS = {
     # 유럽
     'AIR.PA': 'Airbus',
     'OR.PA': 'L’Oreal',
-    'NESN.SW': 'Nestlé',
+    # 'NESN.SW': 'Nestlé',
     'SIE.DE': 'Siemens',
     'BMW.DE': 'BMW',
     'SAP.DE': 'SAP',
-    'ASML.AS': 'ASML',
-    'ULVR.L': 'Unilever',
+    # 'ASML.AS': 'ASML',
+    # 'ULVR.L': 'Unilever',
     'AZN.L': 'AstraZeneca',
 
     # 남미 (브라질)
     'VALE': 'Vale (Brazil)',
     'PBR': 'Petrobras (Brazil)',
-    'ITUB': 'Itaú Unibanco (Brazil)',
+    # 'ITUB': 'Itaú Unibanco (Brazil)',
 
     # 캐나다
     'SHOP': 'Shopify',
     'RY': 'Royal Bank of Canada',
 
     # 인도
-    'INFY': 'Infosys',
+    # 'INFY': 'Infosys',
     'RELIANCE.NS': 'Reliance'
 }
 
@@ -146,6 +146,11 @@ COMPANY_COLORS = {
 mouse_x = 0
 mouse_y = 0
 
+buy_quantity = 1
+quantity_input_mode = False
+quantity_input_text = ""
+
+
 comparison_scroll_offset_index = 0
 comparison_tickers = []
 comparison_tickers.clear()
@@ -194,8 +199,6 @@ rank_history = {ticker: {} for ticker in TICKERS}  # 모든 티커에 대해 날
 
 start_date = "2000-01-01"  # 예: 2000년 1월 1일 부터
 end_date = datetime.datetime.now().strftime("%Y-%m-%d")
-
-
 
 
 current_day_index = 0  # 현재 시뮬레이션 날짜 인덱스
@@ -249,11 +252,6 @@ pygame.display.set_caption("Stock Trading Simulator")
 font = pygame.font.SysFont(None, 24)
 clock = pygame.time.Clock()
 
-current_ticker_index = 0
-time_indices = {ticker: 0 for ticker in TICKERS}
-
-
-
 
 # 주식 목록 버튼 정의
 # ✅ 대체할 새로운 버튼 생성 코드
@@ -278,8 +276,13 @@ def get_stock_data(ticker):
 
     if os.path.exists(cache_file):
         try:
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True, encoding="utf-8-sig")
+            df = pd.read_csv(cache_file, index_col=0, nrows=5, encoding="utf-8-sig")
+            if not set(required_cols).issubset(df.columns):
+                raise ValueError("필수 컬럼 누락")
+
             required_cols = ["open", "high", "low", "close", "volume"]
+
+
             missing_cols = [col for col in required_cols if col not in df.columns]
 
             if df.empty or missing_cols:
@@ -332,38 +335,28 @@ from concurrent.futures import ThreadPoolExecutor
 
 def download_one(ticker):
     df = get_stock_data(ticker)
-    if df.empty or not all(col in df.columns for col in ["open", "high", "low", "close", "volume"]):
-        print(f"❌ {ticker} 데이터에 필요한 컬럼 없음 → 스킵")
+    if df.empty:
         return
-
-    df = df.dropna(subset=["open", "high", "low", "close", "volume"])
-
-    if df.empty or df.isna().sum().sum() > 0:
-        print(f"⚠️ {ticker} → NaN 포함 또는 비어 있음 → 스킵")
-        return
-
 
     try:
-        opens = [float(p) for p in df['open']]
-        highs = [float(p) for p in df['high']]
-        lows = [float(p) for p in df['low']]
-        closes = [float(p) for p in df['close']]
-        volumes = [int(v) for v in df['volume']]
-        dates = [dt.date() if isinstance(dt, pd.Timestamp) else dt for dt in df.index]
-
-        first_date = df.index[0].date()
+        df = df.dropna(subset=["open", "high", "low", "close", "volume"])
+        df = df.astype({
+            "open": float, "high": float, "low": float, "close": float, "volume": int
+        })
     except Exception as e:
         print(f"⚠️ {ticker} 변환 실패: {e}")
         return
 
-    # 전역 변수에 저장 (주의: 병렬 환경에서도 안전함)
-    prices_by_ticker[f"{ticker}_Open"] = opens
-    prices_by_ticker[f"{ticker}_High"] = highs
-    prices_by_ticker[f"{ticker}_Low"] = lows
-    prices_by_ticker[f"{ticker}_Close"] = closes
-    volumes_by_ticker[ticker] = volumes
-    dates_by_ticker[ticker] = dates
-    first_available_date[ticker] = first_date
+    # 데이터 저장
+    prices_by_ticker.update({
+        f"{ticker}_Open": df["open"].tolist(),
+        f"{ticker}_High": df["high"].tolist(),
+        f"{ticker}_Low": df["low"].tolist(),
+        f"{ticker}_Close": df["close"].tolist()
+    })
+    volumes_by_ticker[ticker] = df["volume"].tolist()
+    dates_by_ticker[ticker] = [d.date() for d in df.index]
+    first_available_date[ticker] = df.index[0].date()
 
 def download_all_stock_data():
     with ThreadPoolExecutor(max_workers=10) as executor:
@@ -373,8 +366,6 @@ def download_all_stock_data():
     print("✅ 정상 처리된 종목 수:", len(prices_by_ticker) // 4)
     if not prices_by_ticker:
         print("❌ 모든 종목 데이터 수집 실패. 캐시를 지우고 다시 시도하세요.")
-
-
 
 def init_game():
     global simulation_date_list
@@ -412,7 +403,6 @@ def init_game():
 
     # 여기 추가 로그!
     print("📅 날짜 예시:", all_dates[:5])
-    print(f"[디버그] simulation_date_list 길이: {len(simulation_date_list)}")
     print(f"[디버그] prices_by_ticker 키 목록: {list(prices_by_ticker.keys())[:5]}")
 
     simulation_date_list = sorted(set(all_dates))  # 만약 all_dates가 date 객체면 이대로 OK
@@ -421,6 +411,7 @@ def init_game():
 
     simulation_date_list.sort()
 
+    print(f"[디버그] simulation_date_list 길이: {len(simulation_date_list)}")
     # ✅ 여기서 출력하는 것이 맞음
     print(f"[디버그] 최종 simulation_date_list 길이: {len(simulation_date_list)}")
 
@@ -759,7 +750,7 @@ def draw_comparison_charts_candlestick():
         date_list = dates_by_ticker[ticker]
         index = 0
         for i, d in enumerate(date_list):
-            d_obj = d if isinstance(d, datetime.date) else datetime.datetime.strptime(str(d), "%Y-%m-%d").date()
+            d_obj = d if isinstance(d, datetime.date) else datetime.datetime.strptime(str(d), "%Y-%m-%d").date().strptime(str(d), "%Y-%m-%d").date()
             if d_obj > today:
                 break
             index = i
@@ -1011,10 +1002,6 @@ def draw_all_companies_grid():
         draw_text("(비교모드에서만 사용 가능)", start_button_x + 10, start_button_y + 5, (160, 160, 160))
 
 
-
-
-
-
 def draw_stock_list(visible_companies):
     draw_text("Current Stock Rankings", LAYOUT["stock_list"]["title_x"], LAYOUT["stock_list"]["title_y"], (255, 255, 0))
     today = simulation_date_list[current_day_index]
@@ -1068,58 +1055,68 @@ def draw_input_box():
 
 
 
-def update_data():
-    global prices_by_ticker, dates_by_ticker
-    # 예시: 각 티커별로 오늘 날짜부터 현재까지 1분 단위 데이터를 업데이트
-    first_available_date = {}
-
-    for ticker in TICKERS:
-        stock_data = yf.download(ticker, start=start_date, end=end_date, interval="1d")['Close'].dropna()
-        prices_by_ticker[ticker] = [float(p.item()) for p in stock_data.values]
-        dates_by_ticker[ticker] = [dt.strftime("%y.%m.%d") for dt in stock_data.index]
-
-        first_available_date[ticker] = stock_data.index[0].date()
-
-        # ✅ 최초 날짜 저장
-        first_date = stock_data.index[0].date()  # datetime.date 객체로 저장
-        first_available_date[ticker] = first_date
-
 def update_intraday_data():
     # 최신 1일치 인트라데이 데이터를 가져오는 예제
     global prices_by_ticker, dates_by_ticker
 
-def buy_stock(ticker):
-    global alerts
-    
+def sell_stock(ticker):
+    global alerts, buy_quantity
+    info = portfolio['stocks'][ticker]
+    quantity = info['quantity']
+    if quantity == 0:
+        alerts.append((f"No {ticker} to sell", time.time()))
+        return
+
     index = min(time_indices[ticker], len(prices_by_ticker[f"{ticker}_Close"]) - 1)
     price = float(prices_by_ticker[f"{ticker}_Close"][index])
+    sell_qty = min(buy_quantity, quantity)
+
+    portfolio['cash'] += price * sell_qty
+    info['quantity'] -= sell_qty
+    if info['quantity'] == 0:
+        info['buy_price'] = 0
+    alerts.append((f"Sold {sell_qty} {ticker}", time.time()))
+    buy_quantity = 1
 
 
-    if portfolio['cash'] >= price:
-        portfolio['cash'] -= price
-        info = portfolio['stocks'][ticker]
-        total_cost = info['quantity'] * info['buy_price'] + price
-        info['quantity'] += 1
-        info['buy_price'] = total_cost / info['quantity']
-        alerts.append((f"Bought 1 {ticker}", time.time()))
-    else:
-        alerts.append((f"Not enough cash to buy {ticker}", time.time()))
 
-def sell_stock(ticker):
-    global alerts
+def buy_stock(ticker):
+    global alerts, buy_quantity
     index = min(time_indices[ticker], len(prices_by_ticker[f"{ticker}_Close"]) - 1)
-    prices = prices_by_ticker[f"{ticker}_Close"][:max(2, index + 1)]
+    price = float(prices_by_ticker[f"{ticker}_Close"][index])
+    total_cost = price * buy_quantity
 
-    info = portfolio['stocks'][ticker]
-    if info['quantity'] > 0:
-        price = float(prices_by_ticker[ticker][time_indices[ticker]])
-        portfolio['cash'] += price
-        info['quantity'] -= 1
-        alerts.append((f"Sold 1 {ticker}", time.time()))
-        if info['quantity'] == 0:
-            info['buy_price'] = 0
+    if portfolio['cash'] >= total_cost:
+        portfolio['cash'] -= total_cost
+        info = portfolio['stocks'][ticker]
+        total_qty = info['quantity']
+        avg_price = info['buy_price']
+        new_total_cost = total_qty * avg_price + total_cost
+        new_total_qty = total_qty + buy_quantity
+        info['quantity'] = new_total_qty
+        info['buy_price'] = new_total_cost / new_total_qty
+        alerts.append((f"Bought {buy_quantity} {ticker}", time.time()))
+
+
     else:
-        alerts.append((f"No {ticker} to sell", time.time()))
+        # 가능한 최대 수량만큼이라도 구매 시도
+        max_qty = int(portfolio['cash'] // price)
+        if max_qty >= 1:
+            portfolio['cash'] -= price * max_qty
+            info = portfolio['stocks'][ticker]
+            total_qty = info['quantity']
+            avg_price = info['buy_price']
+            new_total_cost = total_qty * avg_price + price * max_qty
+            new_total_qty = total_qty + max_qty
+            info['quantity'] = new_total_qty
+            info['buy_price'] = new_total_cost / new_total_qty
+            alerts.append((f"Partially bought {max_qty} {ticker}", time.time()))
+        else:
+            alerts.append((f"Not enough cash to buy {buy_quantity} {ticker}", time.time()))
+
+    buy_quantity = 1
+
+
 
 def draw_alerts():
     now = time.time()
@@ -1283,6 +1280,9 @@ def draw_zoomed_chart_like_chart():
     # 마우스 위치가 거래량 바 위에 있을 경우 거래량 텍스트 출력
     bar_width = width / len(volumes)
     max_volume = max(volumes) if volumes else 1
+    if max_volume == 0:
+        max_volume = 1  # <- 0으로 나누는 것 방지
+
     for i, volume in enumerate(volumes):
         x = offset_x + i * bar_width
         bar_height = max(3, (volume / max_volume) * volume_height)
@@ -1337,9 +1337,6 @@ def draw_zoomed_chart_like_chart():
 
     if comparison_mode and not chart_zoom_mode:
         draw_all_companies_grid()
-
-
-
 
 
 def draw_zoomed_chart(opens, highs, lows, closes, dates):
@@ -1425,8 +1422,6 @@ def draw_zoomed_chart(opens, highs, lows, closes, dates):
     draw_text("ESC to exit zoom", offset_x, volume_offset_y + volume_height + 10, (255, 255, 255))
 
 
-
-
 def draw_ui():
     global start_comparison_button_rect  # ✅ 이 줄 추가
     start_comparison_button_rect = None  # 매 프레임마다 초기화
@@ -1443,6 +1438,7 @@ def draw_ui():
     y_after_profit = draw_portfolio_summary()
     global buy_button_rect, sell_button_rect
     buy_button_rect, sell_button_rect = draw_buttons(y_after_profit)
+    draw_text(f"Quantity: {buy_quantity}", buy_button_rect.x, buy_button_rect.y - 25, (255, 255, 0))
 
     close_key = f"{current_ticker}_Close"
     if close_key in prices_by_ticker:
@@ -1504,7 +1500,7 @@ def draw_comparison_charts():
         if len(prices) < 2:
             continue
 
-        color = COMPANY_COLORS.get(ticker, (255, 255, 255))
+        company_colors = {ticker: COMPANY_COLORS.get(ticker, (255, 255, 255)) for ticker in TICKERS}
         points = []
 
         for j, p in enumerate(prices):
@@ -1513,6 +1509,7 @@ def draw_comparison_charts():
             points.append((x, y))
 
         if len(points) >= 2:
+            color = COMPANY_COLORS.get(ticker, (255, 255, 255))
             pygame.draw.lines(screen, color, False, points, 2)
             draw_text(ticker, int(points[-1][0]), int(points[-1][1]) - 15, color)
 
@@ -1655,6 +1652,19 @@ def draw_comparison_zoom_screen():
     # 🔙 ESC 안내
     draw_text("ESC to exit comparison mode", 80, 20, (255, 255, 255))
 
+def draw_quantity_input_box():
+    global quantity_input_text
+    box_rect = pygame.Rect(LAYOUT["screen"]["width"] // 2 - 150, 100, 300, 40)
+    pygame.draw.rect(screen, (255, 255, 255), box_rect)
+    pygame.draw.rect(screen, (0, 0, 0), box_rect, 2)
+    draw_text("Enter quantity:", box_rect.x + 10, box_rect.y - 30, (255, 255, 0))
+    draw_text(quantity_input_text, box_rect.x + 10, box_rect.y + 10, (0, 0, 0))
+
+    # 🔙 뒤로가기 버튼
+    pygame.draw.rect(screen, (150, 150, 150), back_to_menu_rect)
+    draw_text("Menu", back_to_menu_rect.x + 10, back_to_menu_rect.y + 5)
+
+
 
 def main_loop():
     if not simulation_date_list:
@@ -1664,6 +1674,8 @@ def main_loop():
     global comparison_scroll_offset_index
     global chart_scroll_offset_index
     global comparison_mode, show_comparison_charts
+    global quantity_input_mode, quantity_input_text, buy_quantity
+
     global current_day_index, current_ticker
     global chart_zoom_mode, chart_zoom_scale, chart_zoom_center_ratio
     global input_mode, input_text, load_file_buttons
@@ -1691,6 +1703,29 @@ def main_loop():
             if event.type == pygame.QUIT:
                 running = False
                 continue
+                        # 🔽🔽🔽 여기에 추가하면 됨! 🔽🔽🔽
+            if quantity_input_mode:
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_RETURN:
+                        try:
+                            buy_quantity = max(1, int(quantity_input_text))
+                            alerts.append((f"수량 설정됨: {buy_quantity}", time.time()))
+                        except:
+                            alerts.append(("⚠ 숫자만 입력해주세요.", time.time()))
+                        quantity_input_mode = False
+                        quantity_input_text = ""
+                    elif event.key == pygame.K_BACKSPACE:
+                        quantity_input_text = quantity_input_text[:-1]
+                    elif event.key == pygame.K_ESCAPE:
+                        quantity_input_mode = False
+                        quantity_input_text = ""
+                    elif event.unicode.isdigit():
+                        quantity_input_text += event.unicode
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    if back_to_menu_rect.collidepoint(event.pos):
+                        quantity_input_mode = False
+                        quantity_input_text = ""
+                continue  # 수량 입력 모드일 때는 다른 이벤트 무시
 
             # 확대 차트 모드
             if chart_zoom_mode:
@@ -1761,6 +1796,7 @@ def main_loop():
             if game_state == "menu":
                 if event.type == pygame.MOUSEBUTTONDOWN:
                     if menu_new_game_rect and menu_new_game_rect.collidepoint(event.pos):
+                        global portfolio
                         game_state = "playing"
                         current_day_index = 0
                         portfolio = {
@@ -1776,6 +1812,11 @@ def main_loop():
             # 게임 플레이 화면
             if game_state == "playing":
                 if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_q and (event.mod & pygame.KMOD_SHIFT):
+                        quantity_input_mode = True
+                        quantity_input_text = ""
+                        continue
+
                     if event.key == pygame.K_s and (event.mod & pygame.KMOD_SHIFT):
                         input_mode = "save"
                         input_text = ""
@@ -1788,6 +1829,11 @@ def main_loop():
                         continue
 
                 if event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 4:  # 휠 업                        
+                        buy_quantity += 1
+                    elif event.button == 5:  # 휠 다운
+                        buy_quantity = max(1, buy_quantity - 1)    
+                    
                     if 'mode_button_rect' in globals() and mode_button_rect.collidepoint(event.pos):
                         comparison_mode = not comparison_mode
                         if not comparison_mode:
@@ -1850,25 +1896,22 @@ def main_loop():
                             break
 
         # 날짜 및 데이터 업데이트
-        if time.time() - last_day_update_time > 10:
+        if time.time() - last_day_update_time > 2:
             if current_day_index + 1 < len(simulation_date_list):
                 current_day_index += 1
                 last_day_update_time = time.time()
                 today = simulation_date_list[current_day_index]
-            else:
-                alerts.append(("⏱️ 시뮬레이션 종료 - 더 이상 진행할 날짜가 없습니다.", time.time()))
 
-        for ticker in TICKERS:
-            if ticker not in dates_by_ticker:
-                continue
-            for i, d in enumerate(dates_by_ticker[ticker]):
-                d_obj = d if isinstance(d, datetime.date) else datetime.datetime.strptime(d, "%y.%m.%d").date()
-                if d_obj > today:
-                    break
-                time_indices[ticker] = i
+                # 모든 티커에 대해 유효한 인덱스를 갱신
+                for ticker in TICKERS:
+                    dates = dates_by_ticker.get(ticker, [])
+                    for i, d in enumerate(dates):
+                        if isinstance(d, str):
+                            d = datetime.datetime.strptime(d, "%Y-%m-%d").date()
+                        if d > today:
+                            break
+                        time_indices[ticker] = i
 
-        # 화면 그리기
-        screen.fill((30, 30, 30))
 
         if chart_zoom_mode:
             draw_zoomed_chart_like_chart()
@@ -1880,13 +1923,13 @@ def main_loop():
             draw_load_file_buttons()
         elif game_state == "menu":
             draw_main_menu()
+        elif quantity_input_mode:
+            draw_quantity_input_box()
         else:
             draw_ui()
 
         pygame.display.flip()
         clock.tick(30)
-
-
 
 
 if __name__ == "__main__":
@@ -1900,5 +1943,3 @@ if __name__ == "__main__":
 
     print("🟢 main_loop 시작")  # <- 여기도 디버깅 추가
     main_loop()
-
-
