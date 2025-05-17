@@ -21,3 +21,7 @@
 *가변 에 대해서 공부하기 그리고 list를 잘사용하기
 
 상속과 오버라이딩(self)
+map함수
+yeild
+
+type 과 filter
