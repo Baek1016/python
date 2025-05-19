@@ -9,20 +9,20 @@ TICKERS = {
     'AAPL': 'Apple',
     'GOOG': 'Google',
     'TSLA': 'Tesla',
-    'MSFT': 'Microsoft',
-    'AMZN': 'Amazon',
-    'META': 'Meta',
-    'NFLX': 'Netflix',
-    'NVDA': 'Nvidia',
-    'INTC': 'Intel',
-    'AMD': 'AMD',
-    'DIS': 'Disney',
-    'IBM': 'IBM',
-    'ORCL': 'Oracle',
-    'PYPL': 'PayPal',
-    'ADBE': 'Adobe',
-    'QCOM': 'Qualcomm',
-    'KO': 'CocaCola'
+    # 'MSFT': 'Microsoft',
+    # 'AMZN': 'Amazon',
+    # 'META': 'Meta',
+    # 'NFLX': 'Netflix',
+    # 'NVDA': 'Nvidia',
+    # 'INTC': 'Intel',
+    # 'AMD': 'AMD',
+    # 'DIS': 'Disney',
+    # 'IBM': 'IBM',
+    # 'ORCL': 'Oracle',
+    # 'PYPL': 'PayPal',
+    # 'ADBE': 'Adobe',
+    # 'QCOM': 'Qualcomm',
+    # 'KO': 'CocaCola'
 }
 
 # ✅ UI 레이아웃을 하나의 딕셔너리로 통합 관리하도록 구조화
@@ -217,14 +217,17 @@ def update_data():
 
     for ticker in TICKERS:
         stock_data = yf.download(ticker, start=start_date, end=end_date, interval="1d")['Close'].dropna()
+    
+        if stock_data.empty:
+            print(f"❌ {ticker} 데이터 다운로드 실패, 건너뜀")
+            continue
+        
         prices_by_ticker[ticker] = [float(p.item()) for p in stock_data.values]
         dates_by_ticker[ticker] = [dt.strftime("%y.%m.%d") for dt in stock_data.index]
-
         first_available_date[ticker] = stock_data.index[0].date()
+    
+        time.sleep(0.5)
 
-        # ✅ 최초 날짜 저장
-        first_date = stock_data.index[0].date()  # datetime.date 객체로 저장
-        first_available_date[ticker] = first_date
 
 def update_intraday_data():
     # 최신 1일치 인트라데이 데이터를 가져오는 예제
