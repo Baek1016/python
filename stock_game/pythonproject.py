@@ -813,8 +813,6 @@ def draw_comparison_charts_candlestick():
         draw_text(f"{TICKERS[ticker]} ({ticker})", offset_x, start_y - 20, (255, 255, 0))
 
 
-
-
 def draw_volume_bars(volumes, offset_x, offset_y, width, height):
     if len(volumes) < 2:
         return
@@ -833,8 +831,6 @@ def draw_volume_bars(volumes, offset_x, offset_y, width, height):
     if not volumes or max(volumes) == 0:
         print("⚠️ 거래량이 비어있거나 0입니다.")
         return
-
-
 
 
 def draw_portfolio_summary():
@@ -1075,7 +1071,6 @@ def sell_stock(ticker):
     buy_quantity = 1
 
 
-
 def buy_stock(ticker):
     global alerts, buy_quantity
     index = min(time_indices[ticker], len(prices_by_ticker[f"{ticker}_Close"]) - 1)
@@ -1111,7 +1106,6 @@ def buy_stock(ticker):
             alerts.append((f"Not enough cash to buy {buy_quantity} {ticker}", time.time()))
 
     buy_quantity = 1
-
 
 
 def draw_alerts():
