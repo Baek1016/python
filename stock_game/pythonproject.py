@@ -29,19 +29,19 @@ TICKERS = {
     'NFLX': 'Netflix',
     'NVDA': 'Nvidia',
     'INTC': 'Intel',
-    'AMD': 'AMD',
-    'DIS': 'Disney',
-    'IBM': 'IBM',
-    'ORCL': 'Oracle',
-    'PYPL': 'PayPal',
-    'ADBE': 'Adobe',
-    'QCOM': 'Qualcomm',
-    'KO': 'CocaCola',
-    'PEP': 'PepsiCo',
-    'WMT': 'Walmart',
-    'JNJ': 'Johnson & Johnson',
-    'V': 'Visa',
-    'MA': 'Mastercard',
+    # 'AMD': 'AMD',
+    # 'DIS': 'Disney',
+    # 'IBM': 'IBM',
+    # 'ORCL': 'Oracle',
+    # 'PYPL': 'PayPal',
+    # 'ADBE': 'Adobe',
+    # 'QCOM': 'Qualcomm',
+    # 'KO': 'CocaCola',
+    # 'PEP': 'PepsiCo',
+    # 'WMT': 'Walmart',
+    # 'JNJ': 'Johnson & Johnson',
+    # 'V': 'Visa',
+    # 'MA': 'Mastercard',
 
     # 한국
     '005930.KS': '삼성전자',
@@ -68,25 +68,20 @@ TICKERS = {
     # 유럽
     'AIR.PA': 'Airbus',
     'OR.PA': 'L’Oreal',
-    # 'NESN.SW': 'Nestlé',
     'SIE.DE': 'Siemens',
     'BMW.DE': 'BMW',
     'SAP.DE': 'SAP',
-    # 'ASML.AS': 'ASML',
-    # 'ULVR.L': 'Unilever',
     'AZN.L': 'AstraZeneca',
 
     # 남미 (브라질)
     'VALE': 'Vale (Brazil)',
     'PBR': 'Petrobras (Brazil)',
-    # 'ITUB': 'Itaú Unibanco (Brazil)',
 
     # 캐나다
     'SHOP': 'Shopify',
     'RY': 'Royal Bank of Canada',
 
     # 인도
-    # 'INFY': 'Infosys',
     'RELIANCE.NS': 'Reliance'
 }
 
@@ -299,6 +294,7 @@ def get_stock_data(ticker):
     if should_update:
         print(f"📡 캐시 갱신: {ticker}")
         try:
+            time.sleep(1)  # ← 요거 추가!
             ticker_obj = yf.Ticker(ticker)
             df = ticker_obj.history(start=start_date, end=end_date, interval="1d", auto_adjust=False)
         except Exception as e:
@@ -359,7 +355,7 @@ def download_one(ticker):
     first_available_date[ticker] = df.index[0].date()
 
 def download_all_stock_data():
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         executor.map(download_one, TICKERS)
 
     print("✅ 다운로드 완료된 종목들:", list(prices_by_ticker.keys()))
