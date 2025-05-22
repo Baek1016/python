@@ -17,6 +17,11 @@ if not os.path.exists(CACHE_DIR):
 
     os.makedirs(CACHE_DIR)
 
+exchange_rates = {}
+news_events = []  # 전체 뉴스/이벤트 목록
+active_events = []  # 현재 적용 중인 이벤트 (차트에 영향 줄 이벤트)
+
+
 # ----- 1. 데이터 준비: 여러 종목 데이터 다운로드 -----
 TICKERS = {
     # 미국
@@ -29,28 +34,26 @@ TICKERS = {
     'NFLX': 'Netflix',
     'NVDA': 'Nvidia',
     'INTC': 'Intel',
-    # 'AMD': 'AMD',
-    # 'DIS': 'Disney',
-    # 'IBM': 'IBM',
-    # 'ORCL': 'Oracle',
-    # 'PYPL': 'PayPal',
-    # 'ADBE': 'Adobe',
-    # 'QCOM': 'Qualcomm',
-    # 'KO': 'CocaCola',
-    # 'PEP': 'PepsiCo',
-    # 'WMT': 'Walmart',
-    # 'JNJ': 'Johnson & Johnson',
-    # 'V': 'Visa',
-    # 'MA': 'Mastercard',
+    'AMD': 'AMD',
+    'DIS': 'Disney',
+    'IBM': 'IBM',
+    'ORCL': 'Oracle',
+    'PYPL': 'PayPal',
+    'ADBE': 'Adobe',
+    'QCOM': 'Qualcomm',
+    'KO': 'CocaCola',
+    'PEP': 'PepsiCo',
+    'WMT': 'Walmart',
+    'JNJ': 'Johnson & Johnson',
+    'V': 'Visa',
+    'MA': 'Mastercard',
 
     # 한국
-    '005930.KS': '삼성전자',
-    '000660.KS': 'SK하이닉스',
-    '066570.KS': 'LG전자',
-    '005380.KS': '현대차',
-    '035420.KS': 'NAVER',
-    '035720.KS': '카카오',
-
+    '005930.KS': 'Samsung Electronics',
+    '066570.KS': 'LG Electronics',
+    '005380.KS': 'Hyundai Motor',
+    '035420.KS': 'Naver',
+    '035720.KS': 'Kakao',
     # 대만
     # '2330.TW': 'TSMC',
 
@@ -71,7 +74,6 @@ TICKERS = {
     'SIE.DE': 'Siemens',
     'BMW.DE': 'BMW',
     'SAP.DE': 'SAP',
-    'AZN.L': 'AstraZeneca',
 
     # 남미 (브라질)
     'VALE': 'Vale (Brazil)',
@@ -138,6 +140,25 @@ COMPANY_COLORS = {
     'QCOM': (102, 0, 204),
     'KO': (255, 51, 0)
 }
+
+news_events = [
+    {
+        "date": datetime.date(2023, 5, 30),
+        "ticker": "TSLA",
+        "title": "Tesla CEO 사임 발표",
+        "effect_days": [1],  # 1일 뒤에 적용
+        "impact": -0.1       # 10% 하락
+    },
+    {
+        "date": datetime.date(2023, 6, 3),
+        "ticker": "MSFT",
+        "title": "MS Office 무료화 루머",
+        "effect_days": [0, 1, 2],
+        "impact": +0.05  # 5% 상승
+    }
+]
+
+
 mouse_x = 0
 mouse_y = 0
 
@@ -244,7 +265,7 @@ LAYOUT["screen"]["width"], LAYOUT["screen"]["height"] = window_width, window_hei
 
 
 pygame.display.set_caption("Stock Trading Simulator")
-font = pygame.font.SysFont(None, 24)
+font = pygame.font.SysFont("Arial", 24)
 clock = pygame.time.Clock()
 
 
@@ -265,18 +286,50 @@ MAX_SCROLL = max(0, len(TICKERS) * button_height - 500)
 
 
 # ----- 4. 함수 정의 -----
+def get_exchange_rates(base="USD"):
+    import requests
+    try:
+        url = f"https://api.exchangerate.host/latest?base={base}"
+        response = requests.get(url, timeout=3)
+        data = response.json()
+        if "rates" not in data:
+            raise ValueError("Missing 'rates' in API response")
+        return data["rates"]
+    except Exception as e:
+        print("⚠ 환율 정보 가져오기 실패:", e)
+        return {
+            "KRW": 1300,
+            "JPY": 150,
+            "EUR": 0.9,
+            "GBP": 0.78,
+            "INR": 83.0  # 인도 주식 대비
+        }
+
+
+
 def get_stock_data(ticker):
     cache_file = os.path.join(CACHE_DIR, f"{ticker}.csv")
     should_update = True
+    required_cols = ["open", "high", "low", "close", "volume"]
 
     if os.path.exists(cache_file):
         try:
-            df = pd.read_csv(cache_file, index_col=0, nrows=5, encoding="utf-8-sig")
-            if not set(required_cols).issubset(df.columns):
-                raise ValueError("필수 컬럼 누락")
+            df = pd.read_csv(cache_file, index_col=0, encoding="utf-8-sig")
 
-            required_cols = ["open", "high", "low", "close", "volume"]
+            # ✅ 환율이 적용되었는지 확인하는 조건 (예: AZN.L의 가격이 3000 이상이면 삭제)
+            if ticker.endswith(".KS") and df["close"].iloc[0] > 1000:
+                print(f"⚠ {ticker} 캐시가 환율 미적용 상태로 보임 → 삭제 후 재다운로드")
+                os.remove(cache_file)
+                should_update = True
 
+            # 기존 코드: AZN.L도 검사
+            elif ticker == "AZN.L" and df["close"].iloc[0] > 500:
+                print(f"⚠ {ticker} 캐시가 환율 적용 없이 저장됨 → 삭제 후 재다운로드")
+                os.remove(cache_file)
+                should_update = True
+            else:
+                should_update = False
+                return df
 
             missing_cols = [col for col in required_cols if col not in df.columns]
 
@@ -326,19 +379,90 @@ def get_stock_data(ticker):
             return pd.DataFrame()
 
 
-    
-from concurrent.futures import ThreadPoolExecutor
-
 def download_one(ticker):
+    global exchange_rates
+    if not exchange_rates:
+        exchange_rates = get_exchange_rates()
     df = get_stock_data(ticker)
-    if df.empty:
+    if df is None or df.empty or len(df) < 2:
+        print(f"❌ {ticker} → 유효한 데이터 없음 → 스킵")
         return
+
 
     try:
         df = df.dropna(subset=["open", "high", "low", "close", "volume"])
+        if ticker.endswith(".KS"):
+            rate = exchange_rates.get("KRW", 1300)
+            df["open"] /= rate
+            df["high"] /= rate
+            df["low"] /= rate
+            df["close"] /= rate
+
+        elif ticker.endswith(".T"):  # 일본
+            rate = exchange_rates.get("JPY", 150)
+            df["open"] /= rate
+            df["high"] /= rate
+            df["low"] /= rate
+            df["close"] /= rate
+
+        elif ticker.endswith(".PA") or ticker.endswith(".DE"):  # 프랑스/독일
+            rate = exchange_rates.get("EUR", 0.9)
+            df["open"] /= rate
+            df["high"] /= rate
+            df["low"] /= rate
+            df["close"] /= rate
+
+        elif ticker.endswith(".L"):  # 영국 (GBP)
+            rate = exchange_rates.get("GBP") or 0.78
+            if rate is None or rate == 0:
+                print(f"⚠ {ticker}의 GBP 환율을 가져오지 못했습니다. 기본값 0.78 사용")
+                rate = 0.78
+
+            df["open"] /= rate
+            df["high"] /= rate
+            df["low"] /= rate
+            df["close"] /= rate
+
+
+
         df = df.astype({
             "open": float, "high": float, "low": float, "close": float, "volume": int
         })
+        # ✅ 이벤트 효과 반영 (특정 날짜 도달 시 주가 조작)
+                # ✅ 먼저 데이터 저장!
+        prices_by_ticker.update({
+            f"{ticker}_Open": df["open"].tolist(),
+            f"{ticker}_High": df["high"].tolist(),
+            f"{ticker}_Low": df["low"].tolist(),
+            f"{ticker}_Close": df["close"].tolist()
+        })
+        volumes_by_ticker[ticker] = df["volume"].tolist()
+        dates_by_ticker[ticker] = [d.date() for d in df.index]
+        first_available_date[ticker] = df.index[0].date()
+
+        # 상장일이 시뮬레이션 시작일보다 늦으면 스킵
+        if simulation_date_list and first_available_date[ticker] > simulation_date_list[0]:
+            print(f"🚫 {ticker} → 상장일({first_available_date[ticker]})이 시뮬레이션 시작일({simulation_date_list[0]})보다 늦음 → 제외")
+            return
+
+
+        # ✅ 그다음 이벤트 적용 (가능할 때만)
+        if not simulation_date_list:
+            return  # 이벤트 적용은 생략
+
+        today = simulation_date_list[min(current_day_index, len(simulation_date_list)-1)]
+
+        for event in active_events:
+            if event["ticker"] == ticker:
+                day_diff = (today - event["date"]).days
+                if day_diff in event["effect_days"]:
+                    impact = event["impact"]
+                    df["open"] *= (1 + impact)
+                    df["high"] *= (1 + impact)
+                    df["low"] *= (1 + impact)
+                    df["close"] *= (1 + impact)
+
+
     except Exception as e:
         print(f"⚠️ {ticker} 변환 실패: {e}")
         return
@@ -352,7 +476,7 @@ def download_one(ticker):
     })
     volumes_by_ticker[ticker] = df["volume"].tolist()
     dates_by_ticker[ticker] = [d.date() for d in df.index]
-    first_available_date[ticker] = df.index[0].date()
+    
 
 def download_all_stock_data():
     with ThreadPoolExecutor(max_workers=3) as executor:
@@ -376,6 +500,9 @@ def init_game():
     screen.blit(loading_text, (LAYOUT["screen"]["width"] // 2 - 150, LAYOUT["screen"]["height"] // 2))
     pygame.display.flip()
 
+    global exchange_rates
+    exchange_rates = get_exchange_rates()
+
     # ✅ 그 다음 데이터를 다운로드함
     download_all_stock_data()
     
@@ -384,7 +511,7 @@ def init_game():
         if f"{ticker}_Close" in prices_by_ticker:
             print(f"✅ {ticker} 차트 있음")
         else:
-            print(f"❌ {ticker} 차트 없음 (prices_by_ticker에 없음)")
+            print(f"❌ {ticker} No chart data (prices_by_ticker에 없음)")
 
 
     all_dates = []
@@ -625,7 +752,7 @@ def draw_chart(prices, dates):
     min_price = min(lows)
 
     if max_price == min_price:
-        draw_text("⚠ 가격 변화 없음", offset_x, offset_y + height // 2, (200, 100, 100))
+        draw_text("⚠ No price change", offset_x, offset_y + height // 2, (200, 100, 100))
         return
 
     scale = height / (max_price - min_price)
@@ -799,14 +926,26 @@ def draw_comparison_charts_candlestick():
 
 
         # 선 그래프
+        
         points = []
         for i, price in enumerate(closes):
             x_point = offset_x + i * bar_width
             y_point = start_y + chart_height - (price - min_price) * price_scale
             points.append((float(x_point), float(y_point)))
 
+        # 2. 그다음에 draw
         if len(points) >= 2:
             pygame.draw.lines(screen, (0, 255, 0), False, points, 2)
+    
+        if not points or len(points) < 2:
+            print(f"⚠️ {ticker} 선 그래프 그릴 Not enough data")
+            print(f"→ closes 길이: {len(closes)}, prices: {closes[:5]}")
+        
+
+        # 🔍 마우스 올렸을 때 거래량 텍스트 표시
+        bar_rect = pygame.Rect(x, y, bar_width * 0.8, vol_height)
+        if bar_rect.collidepoint(mouse_x, mouse_y):
+            draw_text(f"{v:,}", int(x), int(y) - 20, (255, 255, 255))
 
         # 텍스트
         draw_text("Volume", offset_x, start_y + chart_height + volume_height + 5, (100, 200, 255))
@@ -829,7 +968,7 @@ def draw_volume_bars(volumes, offset_x, offset_y, width, height):
         pygame.draw.rect(screen, (100, 200, 255), (x, y, bar_width * 0.9, bar_height))
     
     if not volumes or max(volumes) == 0:
-        print("⚠️ 거래량이 비어있거나 0입니다.")
+        print("⚠️ No volume data.")
         return
 
 
@@ -989,7 +1128,7 @@ def draw_all_companies_grid():
             pygame.draw.rect(screen, (100, 200, 100), start_comparison_button_rect)
         else:
             pygame.draw.rect(screen, (120, 120, 120), start_comparison_button_rect)
-        draw_text("선택한 차트 비교 실행", start_button_x + 20, start_button_y + 5)
+        draw_text("Compare selected charts", start_button_x + 20, start_button_y + 5)
     else:
         draw_text("(비교모드에서만 사용 가능)", start_button_x + 10, start_button_y + 5, (160, 160, 160))
 
@@ -1224,7 +1363,7 @@ def draw_zoomed_chart_like_chart():
     min_price = min(lows)
     
     if max_price == min_price:
-        draw_text("⚠ 가격 변화 없음", offset_x, offset_y + height // 2, (200, 100, 100))
+        draw_text("⚠ No price change", offset_x, offset_y + height // 2, (200, 100, 100))
         return
 
     scale = height / (max_price - min_price)
@@ -1316,7 +1455,7 @@ def draw_zoomed_chart_like_chart():
 
     # 뒤로가기 버튼도 표시
     pygame.draw.rect(screen, (150, 150, 150), back_to_menu_rect)
-    draw_text("← Menu", back_to_menu_rect.x + 10, back_to_menu_rect.y + 5)
+    draw_text(" Menu", back_to_menu_rect.x + 10, back_to_menu_rect.y + 5)
 
     if comparison_mode:
         pygame.draw.rect(screen, (200, 100, 100), mode_button_rect)
@@ -1441,6 +1580,13 @@ def draw_ui():
 
         draw_chart(prices, dates)
 
+        # ✅ 현재 종목 관련 뉴스 출력
+        news_y = LAYOUT["chart"]["y"] + LAYOUT["chart"]["height"] + 150
+        for event in active_events:
+            if event["ticker"] == current_ticker:
+                draw_text(f"📰 {event['title']}", 50, news_y, (255, 255, 0))
+                news_y += 30
+
         # 🔧 확대 모드일 때 그리드는 안 보이게
         if not chart_zoom_mode:
             draw_all_companies_grid()
@@ -1452,7 +1598,7 @@ def draw_ui():
     
     # 🟡 뒤로가기 버튼
     pygame.draw.rect(screen, (150, 150, 150), back_to_menu_rect)
-    draw_text("← Menu", back_to_menu_rect.x + 10, back_to_menu_rect.y + 5)
+    draw_text(" Menu", back_to_menu_rect.x + 10, back_to_menu_rect.y + 5)
     # draw_ui() 함수 내 draw_comparison_charts() 호출 부분을 아래처럼 수정
 
 
@@ -1699,7 +1845,7 @@ def main_loop():
                     if event.key == pygame.K_RETURN:
                         try:
                             buy_quantity = max(1, int(quantity_input_text))
-                            alerts.append((f"수량 설정됨: {buy_quantity}", time.time()))
+                            alerts.append((f"Quantity set: {buy_quantity}", time.time()))
                         except:
                             alerts.append(("⚠ 숫자만 입력해주세요.", time.time()))
                         quantity_input_mode = False
@@ -1844,7 +1990,7 @@ def main_loop():
                                 comparison_zoom_mode = True
                                 print("✅ 비교 차트 줌 모드 진입!")
                             else:
-                                alerts.append(("⚠ 최소 1개 이상 선택해야 합니다.", time.time()))
+                                alerts.append(("⚠ Select at least 1 stock.", time.time()))
                         continue
 
                     if comparison_tickers:
@@ -1891,6 +2037,13 @@ def main_loop():
                 current_day_index += 1
                 last_day_update_time = time.time()
                 today = simulation_date_list[current_day_index]
+                
+                # ✅ 뉴스 이벤트 발생 (이벤트 발동 날짜 도달 시)
+                for event in news_events:
+                    if event["date"] == today:
+                        active_events.append(event)
+                        alerts.append((f"📰 {event['title']}", time.time()))
+
 
                 # 모든 티커에 대해 유효한 인덱스를 갱신
                 for ticker in TICKERS:
