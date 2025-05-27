@@ -75,5 +75,15 @@ LAYOUT = {
         "width": 683,
         "extra_height": 20
     },
-    "cash": {"x": 30, "y": 30}
+    "cash": {"x": 30, "y": 30},
+    "news": {
+        "x": 1200, "y": 300,
+        "width": 360,
+        "max_lines": 10
+    },
+    "longterm_news": {
+    "x": 950,  # 원하는 위치로 조절 가능
+    "y": 60
+}
+
 }

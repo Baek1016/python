@@ -2,150 +2,112 @@ import datetime
 import time
 import pygame
 import sys
-from constants import TICKERS
-from constants import LAYOUT
-from ui_drawer import draw_ui
-from data_loader import download_all_stock_data, prices_by_ticker, dates_by_ticker
+from constants import TICKERS, LAYOUT
 
-# 전체 상태 변수들 정의
+from data_loader import download_all_stock_data, prices_by_ticker, dates_by_ticker, ipo_dates_by_ticker
+from profit_tracker import calculate_total_profit, plot_profit_history
+from events import schedule_random_events, get_events_for_date
+from portfolio_manager import buy_stock, sell_stock
+
+# 전역 상태 정의
 game_mode = "menu"
 simulation_date_list = []
 current_day_index = 0
-current_ticker_index = 0
 current_ticker = None
 time_indices = {}
-comparison_tickers = []
-comparison_mode = False
-comparison_zoom_mode = False
-show_comparison_charts = False
-chart_zoom_mode = False
-chart_scroll_offset_index = 0
-chart_zoom_scale = 1.0
-chart_zoom_center_ratio = 0.5
-scroll_offset = 0
-MAX_SCROLL = 0
-
-# 이벤트 관련
-news_events = []
-active_events = []
-
-# 알림 및 입력
+portfolio = {}
 alerts = []
-input_mode = None
-input_text = ""
-load_file_buttons = []
-quantity_input_mode = False
-quantity_input_text = ""
-buy_quantity = 1
-
-# 종목별 시점
-first_available_date = {}
-
-# 기타 전역 레이아웃 관련 스크롤
-portfolio_scroll_offset = 0
-PORTFOLIO_MAX_SCROLL = 0
-stock_scroll_offset = 0
-STOCK_MAX_SCROLL = 0
-
-# ✅ 포트폴리오 상태 추가 (UI와 매매에서 사용함)
-portfolio = {
-    "cash": 100000.0,
-    "stocks": {ticker: {"quantity": 0, "buy_price": 0.0} for ticker in prices_by_ticker.keys() if ticker.endswith("_Close")}
-}
+visible_tickers = [] 
+news_log = []  # 📌 과거 뉴스 전체 저장용
+screen = pygame.display.set_mode((2000, 1280)) 
 
 def init_game():
-    global current_ticker, game_mode, simulation_date_list, time_indices, portfolio
+    global simulation_date_list, current_ticker, time_indices, portfolio, game_mode
 
     print("📱 데이터 다운로드 시작...")
-    download_all_stock_data()
-
-    # ✅ 포트폴리오 초기화 (데이터 다운로드 후에)
-    portfolio = {
-        "cash": 100000.0,
-        "stocks": {
-            ticker.replace("_Close", ""): {"quantity": 0, "buy_price": 0.0}
-            for ticker in prices_by_ticker if ticker.endswith("_Close")
-        }
-    }
-
-    # 날짜 리스트 구성
-    for ticker, date_list in dates_by_ticker.items():
-        if date_list:
-            simulation_date_list = date_list
-            print(f"📊 '{ticker}' 종목 기준으로 날짜 리스트 선택됨")
-            break
+    simulation_date_list = download_all_stock_data(list(TICKERS.keys()))
 
     if not simulation_date_list:
         print("❌ 날짜 리스트 없음 → 게임 시작 불가")
         sys.exit()
 
-    print(f"✅ 총 시룰리언 날짜 수: {len(simulation_date_list)}")
-    print(f"📅 시작일: {simulation_date_list[0]}")
-    print(f"📅 종료일: {simulation_date_list[-1]}")
+    print(f"✅ 총 시루리언 날짜 수: {len(simulation_date_list)}")
+    print(f"🗕️ 시작일: {simulation_date_list[0]}")
+    print(f"🗕️ 종료일: {simulation_date_list[-1]}")
 
-    for ticker in dates_by_ticker:
-        time_indices[ticker] = 0
+    # 초기 자사와 보유 주식 설정
+    portfolio.update({
+        "cash": 100000.0,
+        "stocks": {ticker: {"quantity": 0, "buy_price": 0.0} for ticker in TICKERS}
+    })
 
-    for key in prices_by_ticker:
-        if key.endswith("_Close"):
-            current_ticker = key.replace("_Close", "")
+    time_indices.update({ticker: 0 for ticker in TICKERS})
+
+    # 초기 티켓 선택 (IPO 보유한 중 가장 일정 다음일에 시작)
+    for ticker in TICKERS:
+        if is_stock_listed(ticker, simulation_date_list[0]):
+            current_ticker = ticker
             break
 
-    print(f"✅ 초기 종목: {current_ticker}")
+    # 뉴스 이벤트 생성
+    schedule_random_events(list(TICKERS.keys()), simulation_date_list, count=10)
+
     game_mode = "playing"
 
+profit_history = []
 
-def main_loop():
+def main_loop(screen):
     global current_day_index
 
-    screen = pygame.display.set_mode((LAYOUT["screen"]["width"], LAYOUT["screen"]["height"]))
-    pygame.display.set_caption("Stock Simulator")
     clock = pygame.time.Clock()
     running = True
 
     while running:
-        screen.fill((0,0,0))  # 흑 배경
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            elif event.type == pygame.MOUSEBUTTONDOWN:
-                handle_mouse_click(event.pos)   # ← 종목 변경
-                handle_button_click(event.pos)  # ← Buy/Sell 버튼 처리
-
-        # ✅ 날짜 진행 (1일씩)
-        current_day_index += 1
-
-        for ticker in time_indices:
-            if time_indices[ticker] < len(dates_by_ticker[ticker]) - 1:
-                time_indices[ticker] += 1
+        screen.fill((0, 0, 0))
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.MOUSEBUTTONDOWN:
                 handle_mouse_click(event.pos)
+                handle_button_click(event.pos)
 
+        current_day_index += 1
+        if current_day_index >= len(simulation_date_list):
+            print("🗕️ 모든 날짜 종료")
+            break
 
+        current_date = simulation_date_list[current_day_index]
+        apply_news_events(current_date, current_day_index)
+
+        for ticker in time_indices:
+            if time_indices[ticker] < len(simulation_date_list) - 1:
+                time_indices[ticker] += 1
+
+        total_profit = calculate_total_profit()
+        profit_history.append(total_profit)
+        plot_profit_history(profit_history)
+
+        # ✅ UI 그리기
+        from ui_drawer import draw_ui
         draw_ui(screen)
-        pygame.display.flip()
-        clock.tick(5)  # 초당 5일 진행
 
-    pygame.quit()
+        pygame.display.flip()
+        clock.tick(5)
 
 def handle_mouse_click(pos):
     x, y = pos
     y_start = LAYOUT["stock_list"]["y_start"]
-    for i, ticker in enumerate(list(TICKERS.keys())[:10]):
+    current_date = simulation_date_list[current_day_index]
+    
+    for i, ticker in enumerate(visible_tickers):
         rect = pygame.Rect(LAYOUT["stock_list"]["x"], y_start + i * 40, 150, 35)
         if rect.collidepoint(x, y):
             global current_ticker
             current_ticker = ticker
             alerts.append((f"Selected: {ticker}", time.time()))
+            break
 
-
-
-from portfolio_manager import buy_stock, sell_stock
 
 def handle_button_click(pos):
     x, y = pos
@@ -166,3 +128,26 @@ def handle_button_click(pos):
     elif sell_rect.collidepoint(x, y):
         sell_stock(current_ticker, 1)
 
+def apply_news_events(current_date, current_index):
+    events = get_events_for_date(current_date)
+    for event in events:
+        key = f"{event['ticker']}_Close"
+        if key in prices_by_ticker and current_index < len(prices_by_ticker[key]):
+            prices_by_ticker[key][current_index] *= (1 + event["impact"])
+            alerts.append((event["message"], time.time()))
+            print(f"📢 뉴스 적용: {event['ticker']} - {event['message']}")
+
+def is_stock_listed(ticker, current_date):
+    ipo_date = ipo_dates_by_ticker.get(ticker)
+    return ipo_date is not None and current_date >= ipo_date
+
+def apply_news_events(current_date, current_index):
+    events = get_events_for_date(current_date)
+    for event in events:
+        key = f"{event['ticker']}_Close"
+        if key in prices_by_ticker and current_index < len(prices_by_ticker[key]):
+            prices_by_ticker[key][current_index] *= (1 + event["impact"])
+            message = f"{current_date} - {event['message']}"
+            alerts.append((event["message"], time.time()))
+            news_log.append(message)  # ✅ 로그에 추가
+            print(f"📢 뉴스 적용: {event['ticker']} - {event['message']}")

@@ -1,20 +1,25 @@
-# main.py
-
 import pygame
 import sys
-from game_state import init_game, main_loop  # simulation_date_list 제거
+from game_state import init_game, main_loop
+from constants import LAYOUT
 
 if __name__ == "__main__":
     pygame.init()
     print("📦 Pygame initialized")
 
+    # ✅ 화면 크기 설정
+    screen = pygame.display.set_mode((LAYOUT["screen"]["width"], LAYOUT["screen"]["height"]))
+    pygame.display.set_caption("Stock Simulator")
+
     try:
-        init_game()  # 이 안에서 simulation_date_list 비었는지도 판단함
+        init_game()
     except SystemExit:
         sys.exit()
     except Exception as e:
         print(f"❌ 초기화 중 오류 발생: {e}")
         sys.exit(1)
 
-    print("🟢 Starting main loop...")
-    main_loop()
+    # ✅ 메인 루프 실행 (화면 넘김)
+    main_loop(screen)
+
+    pygame.quit()
