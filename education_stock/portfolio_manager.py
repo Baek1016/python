@@ -9,6 +9,10 @@ from trade_logger import log_trade  # ✅ 거래 로그 기록
 FEE_RATE = 0.003  # ✅ 수수료율 (0.3%)
 
 def buy_stock(ticker, quantity):
+    if ticker not in game_state.portfolio['stocks']:
+        print(f"🚫 {ticker} not in portfolio")
+        return
+
     index = min(game_state.time_indices[ticker], len(prices_by_ticker[f"{ticker}_Close"]) - 1)
     price = float(prices_by_ticker[f"{ticker}_Close"][index])
     fee = price * quantity * FEE_RATE
@@ -25,10 +29,10 @@ def buy_stock(ticker, quantity):
         info['quantity'] = new_total_qty
         info['buy_price'] = new_total_cost / new_total_qty
 
-        game_state.alerts.append((f"Bought {quantity} {ticker} @ ${price:.2f} (Fee: ${fee:.2f})", time.time()))
+        game_state.alerts.append((f"✅ Bought {quantity} {ticker} @ ${price:.2f} (Fee: ${fee:.2f})", time.time()))
         log_trade("BUY", ticker, quantity, price, fee, game_state.portfolio['cash'])
     else:
-        max_qty = int(game_state.portfolio['cash'] // (price + price * FEE_RATE))
+        max_qty = int(game_state.portfolio['cash'] // (price * (1 + FEE_RATE)))
         if max_qty >= 1:
             fee = price * max_qty * FEE_RATE
             total_cost = price * max_qty + fee
@@ -42,15 +46,19 @@ def buy_stock(ticker, quantity):
             info['quantity'] = new_total_qty
             info['buy_price'] = new_total_cost / new_total_qty
 
-            game_state.alerts.append((f"Partially bought {max_qty} {ticker} @ ${price:.2f} (Fee: ${fee:.2f})", time.time()))
+            game_state.alerts.append((f"🟡 Partially bought {max_qty} {ticker} @ ${price:.2f} (Fee: ${fee:.2f})", time.time()))
             log_trade("BUY", ticker, max_qty, price, fee, game_state.portfolio['cash'])
         else:
-            game_state.alerts.append((f"Not enough cash to buy {quantity} {ticker}", time.time()))
+            game_state.alerts.append((f"❌ Not enough cash to buy {quantity} {ticker}", time.time()))
 
 def sell_stock(ticker, quantity):
+    if ticker not in game_state.portfolio['stocks']:
+        print(f"🚫 {ticker} not in portfolio")
+        return
+
     info = game_state.portfolio['stocks'][ticker]
     if info['quantity'] == 0:
-        game_state.alerts.append((f"No {ticker} to sell", time.time()))
+        game_state.alerts.append((f"⚠️ No {ticker} to sell", time.time()))
         return
 
     index = min(game_state.time_indices[ticker], len(prices_by_ticker[f"{ticker}_Close"]) - 1)
@@ -65,8 +73,7 @@ def sell_stock(ticker, quantity):
     if info['quantity'] == 0:
         info['buy_price'] = 0.0
 
-    game_state.alerts.append((f"Sold {sell_qty} {ticker} @ ${price:.2f} (Fee: ${fee:.2f})", time.time()))
+    game_state.alerts.append((f"✅ Sold {sell_qty} {ticker} @ ${price:.2f} (Fee: ${fee:.2f})", time.time()))
     log_trade("SELL", ticker, sell_qty, price, fee, game_state.portfolio['cash'])
 
-# ✅ 모듈 외부에서 불러올 수 있도록 정의
 __all__ = ["buy_stock", "sell_stock"]

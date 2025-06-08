@@ -2,34 +2,60 @@
 
 import datetime
 
+# ✅ 화면 크기 상수
+SCREEN_WIDTH = 2200
+SCREEN_HEIGHT = 1280
+
 # ✅ TICKERS (전세계 주식)
 TICKERS = {
     # 미국
-    'AAPL': 'Apple', 'GOOG': 'Google', 'TSLA': 'Tesla', 'MSFT': 'Microsoft', 'AMZN': 'Amazon',
-    'META': 'Meta', 'NFLX': 'Netflix', 'NVDA': 'Nvidia', 'INTC': 'Intel', 'AMD': 'AMD',
-    'DIS': 'Disney', 'IBM': 'IBM', 'ORCL': 'Oracle', 'PYPL': 'PayPal', 'ADBE': 'Adobe',
-    'QCOM': 'Qualcomm', 'KO': 'CocaCola', 'PEP': 'PepsiCo', 'WMT': 'Walmart',
-    'JNJ': 'Johnson & Johnson', 'V': 'Visa', 'MA': 'Mastercard',
+    'AAPL': 'Apple', 'GOOG': 'Google', 
+    'TSLA': 'Tesla', 'MSFT': 'Microsoft', 
+    'AMZN': 'Amazon','META': 'Meta', 
+    # 'NFLX': 'Netflix', 'NVDA': 'Nvidia', 
+    # 'INTC': 'Intel', 'AMD': 'AMD',
+    # 'DIS': 'Disney', 'IBM': 'IBM', 
+    # 'ORCL': 'Oracle', 'PYPL': 'PayPal', 
+    # 'ADBE': 'Adobe',
+    # 'QCOM': 'Qualcomm', 
+    # 'KO': 'CocaCola', 
+    # 'PEP': 'PepsiCo', 
+    # 'WMT': 'Walmart',
+    # 'JNJ': 'Johnson & Johnson', 
+    # 'V': 'Visa', 
+    # 'MA': 'Mastercard',
 
     # 한국
-    '005930.KS': 'Samsung Electronics', '066570.KS': 'LG Electronics',
-    '005380.KS': 'Hyundai Motor', '035420.KS': 'Naver', '035720.KS': 'Kakao',
+    '005930.KS': 'Samsung Electronics', 
+    '066570.KS': 'LG Electronics',
+    '005380.KS': 'Hyundai Motor', 
+    '035420.KS': 'Naver', 
+    '035720.KS': 'Kakao',
 
     # 홍콩
-    '9988.HK': 'Alibaba', '0700.HK': 'Tencent', '1810.HK': 'Xiaomi',
+    '9988.HK': 'Alibaba',
+    '0700.HK': 'Tencent',
+    '1810.HK': 'Xiaomi',
 
     # 일본
-    '6758.T': 'Sony', '9984.T': 'SoftBank', '7203.T': 'Toyota',
+    '6758.T': 'Sony',
+    '9984.T': 'SoftBank',
+    '7203.T': 'Toyota',
 
     # 유럽
-    'AIR.PA': 'Airbus', 'OR.PA': 'L’Oreal', 'SIE.DE': 'Siemens',
-    'BMW.DE': 'BMW', 'SAP.DE': 'SAP',
+    'AIR.PA': 'Airbus', 
+    # 'OR.PA': 'L’Oreal', 
+    # 'SIE.DE': 'Siemens',
+    'BMW.DE': 'BMW',
+    # 'SAP.DE': 'SAP',
 
     # 브라질
-    'VALE': 'Vale (Brazil)', 'PBR': 'Petrobras (Brazil)',
+    'VALE': 'Vale (Brazil)', 
+    # 'PBR': 'Petrobras (Brazil)',
 
     # 캐나다
-    'SHOP': 'Shopify', 'RY': 'Royal Bank of Canada',
+    'SHOP': 'Shopify',
+    #   'RY': 'Royal Bank of Canada',
 
     # 인도
     'RELIANCE.NS': 'Reliance'
@@ -47,7 +73,7 @@ COMPANY_COLORS = {
 
 # ✅ 차트 레이아웃 등 UI 레이아웃 설정
 LAYOUT = {
-    "screen": {"width": 1600, "height": 900},
+    "screen": {"width": SCREEN_WIDTH, "height": SCREEN_HEIGHT},
     "chart": {"x": 478, "y": 50, "width": 751, "height": 268},
     "buttons": {
         "buy": {"width": 136, "height": 45, "offset_x": -341},
@@ -77,13 +103,37 @@ LAYOUT = {
     },
     "cash": {"x": 30, "y": 30},
     "news": {
-        "x": 1200, "y": 300,
-        "width": 360,
-        "max_lines": 10
+        "x": SCREEN_WIDTH - 780,
+        "y": 80,
+        "width": 500,
+        "max_lines": 12
     },
     "longterm_news": {
-    "x": 950,  # 원하는 위치로 조절 가능
-    "y": 60
-}
-
+        "x": 950,
+        "y": 60
+    },
+    "input_box": {
+        "x": 1100,
+        "y": 200,
+        "width": 400,
+        "height": 50
+    },
+    "menu_button": {
+        "x": 20, "y": 20, "width": 100, "height": 30
+    },
+    "mode_button": {
+        "x": 1920, "y": 20, "width": 220, "height": 30
+    },
+    "compare_button": {
+        "x": 1920, "y": 70, "width": 220, "height": 30
+    },
+    "comparison": {
+    "x": 50, "y": 10, "width": 160, "height": 30
+    },
+    "zoom": {
+    "x": 600,
+    "y": 10,
+    "width": 140,
+   "height": 40
+    },
 }

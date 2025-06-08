@@ -1,4 +1,3 @@
-# events.py
 import random
 import datetime
 
@@ -27,38 +26,54 @@ persistent_events = [
         "title": "MS Office 무료화 루머",
         "impact": +0.05,
         "start_date": datetime.date(2023, 6, 3),
-        "end_date": datetime.date(2025, 12, 31)  # 계속 유지되는 효과
+        "end_date": datetime.date(2025, 12, 31)
     }
 ]
 
 # ✅ 랜덤 뉴스 이벤트 리스트
 random_events = []
 
-def schedule_random_events(tickers, simulation_dates, count=100):
+def schedule_random_events(tickers, simulation_dates):
     """
-    특정 종목들에 대해 랜덤 뉴스 이벤트를 simulation_dates 내에서 생성한다.
+    각 종목마다 달에 1개 이상 랜덤 뉴스 이벤트 생성
     """
     global random_events
+    random_events = []
+
     if not simulation_dates:
-        raise ValueError("⚠ simulation_date_list가 비어 있어서 뉴스 이벤트 날짜를 선택할 수 없습니다.")
+        raise ValueError("❌ simulation_date_list가 비어 있음")
 
-    def generate_random_news(ticker):
-        effects = [
-            ("good", 0.05, f"{ticker} releases strong earnings! 📈"),
-            ("bad", -0.05, f"{ticker} hit by regulatory issues. 📉"),
-            ("neutral", 0.0, f"{ticker} holds steady with market.")
-        ]
-        effect_type, change, message = random.choice(effects)
-        valid_dates = simulation_dates[10:] if len(simulation_dates) > 10 else simulation_dates
-        date = random.choice(valid_dates)
-        return {
-            "date": date,
-            "ticker": ticker,
-            "effect": change,
-            "message": message
-        }
+    # ✅ 날짜들을 (year, month) 기준으로 그룹화
+    date_by_month = {}
+    for d in simulation_dates:
+        ym = (d.year, d.month)
+        if ym not in date_by_month:
+            date_by_month[ym] = []
+        date_by_month[ym].append(d)
 
-    random_events = [generate_random_news(ticker) for ticker in random.sample(tickers, min(len(tickers), count))]
+    # ✅ 뉴스 템플릿 정의
+    news_templates = [
+        ("good", +0.05, "{} reports record earnings 📈"),
+        ("bad", -0.05, "{} under investigation ⚖️"),
+        ("neutral", 0.0, "{} holds steady with market."),
+        ("bad", -0.08, "{} faces production delays 🏭"),
+        ("good", +0.08, "{} signs major partnership deal 🤝"),
+        ("bad", -0.07, "{} suffers from CEO controversy 👤"),
+        ("good", +0.1, "{} launches new flagship product 🚀"),
+    ]
+
+    # ✅ 각 티커 × 월 별로 뉴스 생성
+    for ticker in tickers:
+        for ym, dates in date_by_month.items():
+            chosen_date = random.choice(dates)
+            effect_type, impact, template = random.choice(news_templates)
+            message = template.format(ticker)
+            random_events.append({
+                "date": chosen_date,
+                "ticker": ticker,
+                "effect": impact,
+                "message": message
+            })
 
 def get_events_for_date(date):
     """해당 날짜에 발생하는 모든 고정 + 랜덤 뉴스 반환"""
@@ -86,7 +101,7 @@ def get_events_for_date(date):
     return results
 
 def get_persistent_events(current_date):
-    """지속 노출되어야 하는 뉴스 이벤트 목록 반환 (루머 등)"""
+    """지속 노출되어야 하는 뉴스 이벤트 목록 반환"""
     results = []
     for event in persistent_events:
         if event["start_date"] <= current_date <= event["end_date"]:
