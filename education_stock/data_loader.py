@@ -10,6 +10,7 @@ prices_by_ticker = {}
 volumes_by_ticker = {}
 dates_by_ticker = {}
 ipo_dates_by_ticker = {}  # 📌 상장일 저장
+current_prices_usd = {}   # 💵 달러 기준 현재 가격
 
 CACHE_DIR = "cache"
 if not os.path.exists(CACHE_DIR):
@@ -30,11 +31,47 @@ def get_exchange_rates(base="USD"):
             "KRW": 1300, "JPY": 150, "EUR": 0.9, "GBP": 0.78, "INR": 83.0
         }
 
+def get_country_from_ticker(ticker):
+    if ".NS" in ticker:
+        return "INR"
+    elif ".T" in ticker:
+        return "JPY"
+    elif ".HK" in ticker:
+        return "HKD"
+    elif ".KS" in ticker or ".KQ" in ticker:
+        return "KRW"
+    elif ".PA" in ticker or ".DE" in ticker:
+        return "EUR"
+    else:
+        return "USD"
+
+def calculate_current_prices_usd(simulation_date_list=None):
+    global current_prices_usd
+    current_prices_usd = {}
+    rates = get_exchange_rates()
+
+    for key in prices_by_ticker:
+        if not key.endswith("_Close"):
+            continue
+
+        ticker = key.replace("_Close", "")
+        country = get_country_from_ticker(ticker)
+        rate = rates.get(country, 1.0)
+        price_list = prices_by_ticker[key]
+
+        try:
+            if price_list:
+                index = len(simulation_date_list) - 1 if simulation_date_list else -1
+                current_price = price_list[index]
+                usd_price = round(current_price / rate, 2)
+                current_prices_usd[ticker] = usd_price
+        except Exception as e:
+            print(f"⚠️ {ticker} 환산 중 오류: {e}")
+
 def get_stock_data(ticker, start_date, end_date, retries=3):
     cache_file = os.path.join(CACHE_DIR, f"{ticker}.csv")
     required_cols = ["open", "high", "low", "close", "volume"]
 
-    # 🔄 캐시가 있다면 불러오기
     if os.path.exists(cache_file):
         try:
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
@@ -50,7 +87,6 @@ def get_stock_data(ticker, start_date, end_date, retries=3):
             print(f"⚠ 캐시 파일 오류: {ticker} → {e}")
             os.remove(cache_file)
 
-    # 📡 다운로드
     for attempt in range(1, retries + 1):
         try:
             print(f"📡 다운로드 중: {ticker} (시도 {attempt})")
@@ -119,5 +155,7 @@ __all__ = [
     "prices_by_ticker",
     "volumes_by_ticker",
     "dates_by_ticker",
-    "ipo_dates_by_ticker"
+    "ipo_dates_by_ticker",
+    "calculate_current_prices_usd",
+    "current_prices_usd"
 ]

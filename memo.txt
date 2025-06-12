@@ -33,3 +33,20 @@ map함수
 이벤트 반영	주가 변동 요인 이해
 AI 플레이어	시장 구조와 전략적 사고 훈련
 리스크 분석	자산 관리 및 통계 분석 훈련
+
+
+
+draw_candle_chart()	candle_chart.py	mplfinance로 이미지 저장
+draw_comparison_charts_candlestick()	ui_drawer.py	저장된 이미지를 Pygame으로 출력
+prices_by_ticker	data_loader.py	OHLCV 데이터 구조로 구성
+tickers 선택	Select Mode	비교할 종목 선택 후 chart.png 출력
+
+🔐 Save/Load 시스템 (save_manager.py)
+
+📉 비교 차트 (draw_comparison_charts + mplfinance)
+
+✏️ 선 그리기 및 차트 상 분석 도구
+
+날짜및 월급 시간넘어감을 통해 게임 조절
+
+시간 나면 가상의 비트 코인

@@ -1,14 +1,18 @@
+#game_state.py
 import datetime
 import time
 import pygame
 import sys
 from constants import TICKERS, LAYOUT
+import os
+
 
 from data_loader import (
     download_all_stock_data,
     prices_by_ticker,
     dates_by_ticker,
-    ipo_dates_by_ticker
+    ipo_dates_by_ticker,
+    calculate_current_prices_usd  # ✅ 환율 기반 현재가 추가
 )
 from profit_tracker import calculate_total_profit, plot_profit_history
 from events import schedule_random_events, get_events_for_date
@@ -37,6 +41,14 @@ load_file_buttons = []
 
 profit_history = []
 
+game_mode = "menu"  # 시작 시 메뉴 모드 (menu, play, load)
+
+selected_save_file = None
+load_file_buttons = []
+input_mode = None
+input_text = ""
+
+
 # ✅ 선택 색상 정의
 selection_colors = [(0, 0, 255), (0, 128, 0), (255, 0, 0), (128, 0, 128)]
 
@@ -48,6 +60,7 @@ last_mouse_pos = (0, 0)
 zoom_levels = [0.5, 0.8, 1.0, 1.5, 2.0]
 zoom_level_index = 2  # 기본은 1.0배
 grid_button_rects = {} 
+top10_button_rects = {}  # 좌측 순위 버튼 rect → ticker 매핑용
 
 def init_game():
     global simulation_date_list, current_ticker, time_indices, portfolio, game_mode
@@ -76,6 +89,7 @@ def init_game():
             break
 
     schedule_random_events(list(TICKERS.keys()), simulation_date_list)
+    calculate_current_prices_usd()  # ✅ 현재가 계산
     game_mode = "playing"
 
 def main_loop(screen):
@@ -151,27 +165,22 @@ def main_loop(screen):
 
 def handle_mouse_click(pos):
     x, y = pos
-    y_start = LAYOUT["stock_list"]["y_start"]
     current_date = simulation_date_list[current_day_index]
 
-    for i, ticker in enumerate(visible_tickers):
-        rect = pygame.Rect(LAYOUT["stock_list"]["x"], y_start + i * 40, 150, 35)
+    for ticker, rect in grid_button_rects.items():
         if rect.collidepoint(x, y):
-            global current_ticker, comparison_tickers
+            global current_ticker
             if comparison_mode:
                 toggle_ticker_selection(ticker)
             else:
                 current_ticker = ticker
                 alerts.append((f"Selected: {ticker}", time.time()))
-            break
 
-    for ticker, rect in game_state.grid_button_rects.items():
+    for ticker, rect in top10_button_rects.items():
         if rect.collidepoint(x, y):
-            if game_state.comparison_mode:
-                toggle_ticker_selection(ticker)
-            else:
-                game_state.current_ticker = ticker
-                alerts.append((f"Selected: {ticker}", time.time()))
+            current_ticker = ticker
+            alerts.append((f"Selected from Top10: {ticker}", time.time()))
+            return
 
 def handle_button_click(pos):
     x, y = pos
@@ -225,15 +234,9 @@ def apply_news_events(current_date, current_index):
         key = f"{event['ticker']}_Close"
         if key in prices_by_ticker and current_index < len(prices_by_ticker[key]):
             prices_by_ticker[key][current_index] *= (1 + event["impact"])
-            message = f"{current_date} - {event['message']}"
             alerts.append((event["message"], time.time()))
-            # 🔻 여기 수정!
-            news_log.append({
-                "date": current_date,
-                "message": event["message"]
-            })
+            news_log.append({"date": current_date, "message": event["message"]})
             print(f"📢 뉴스 적용: {event['ticker']} - {event['message']}")
-
 
 def is_stock_listed(ticker, current_date):
     ipo_date = ipo_dates_by_ticker.get(ticker)

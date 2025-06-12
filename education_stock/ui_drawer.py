@@ -1,20 +1,68 @@
+#ui_drawer.py
 import time
 import pygame
 import os
+import math
 from constants import LAYOUT, TICKERS
 from font_loader import font
-from data_loader import prices_by_ticker, volumes_by_ticker, dates_by_ticker, ipo_dates_by_ticker
+from data_loader import prices_by_ticker, volumes_by_ticker, dates_by_ticker, ipo_dates_by_ticker, current_prices_usd
 import game_state
 from utils import draw_text
 from candle_chart import draw_candle_chart
 from events import get_events_for_date, get_persistent_events
+from save_manager import list_saved_files, load_game, save_game, delete_game
+from game_state import game_mode, load_file_buttons, selected_save_file
+from constants import LAYOUT
+
+FONT = pygame.font.SysFont("Arial", 22)
 
 selection_colors = [
-    (0, 102, 255),   # 파랑
-    (0, 204, 102),   # 초록
-    (255, 102, 102), # 빨강
-    (153, 102, 255), # 보라
+    (0, 102, 255), (0, 204, 102), (255, 102, 102), (153, 102, 255),
 ]
+
+def draw_text(text, x, y, color, screen):
+    label = FONT.render(text, True, color)
+    screen.blit(label, (x, y))
+
+def draw_main_menu(screen):
+    screen.fill((20, 20, 20))
+    draw_text("📊 Stock Game Menu", 100, 100, (255, 255, 255), screen)
+
+    new_game_btn = pygame.Rect(100, 180, 200, 50)
+    load_game_btn = pygame.Rect(100, 250, 200, 50)
+
+    pygame.draw.rect(screen, (100, 200, 100), new_game_btn)
+    pygame.draw.rect(screen, (100, 100, 200), load_game_btn)
+
+    draw_text("New Game", 130, 195, (0, 0, 0), screen)
+    draw_text("Load Game", 130, 265, (0, 0, 0), screen)
+
+    return {"new": new_game_btn, "load": load_game_btn}
+
+
+def draw_load_file_buttons(screen):
+    screen.fill((30, 30, 30))
+    draw_text("💾 Load Saved Game", 100, 40, (255, 255, 255), screen)
+
+    files = list_saved_files()
+    load_file_buttons.clear()
+    start_y = 100
+
+    for i, file in enumerate(files):
+        y = start_y + i * 50
+        file_rect = pygame.Rect(100, y, 300, 40)
+        load_btn = pygame.Rect(420, y, 80, 40)
+        del_btn = pygame.Rect(510, y, 80, 40)
+
+        pygame.draw.rect(screen, (50, 50, 50), file_rect)
+        pygame.draw.rect(screen, (0, 120, 255), load_btn)
+        pygame.draw.rect(screen, (200, 50, 50), del_btn)
+
+        draw_text(file, 110, y + 10, (255, 255, 255), screen)
+        draw_text("Load", 430, y + 10, (255, 255, 255), screen)
+        draw_text("Delete", 515, y + 10, (255, 255, 255), screen)
+
+        load_file_buttons.append((file, load_btn, del_btn))
 
 def is_stock_listed(ticker, current_date):
     ipo_date = ipo_dates_by_ticker.get(ticker)
@@ -23,6 +71,12 @@ def is_stock_listed(ticker, current_date):
 def draw_ui(screen):
     screen.fill((0, 0, 0))
     current_date = game_state.simulation_date_list[game_state.current_day_index]
+
+    # ✅ 현재 날짜 기준 상장된 종목만 표시
+    game_state.visible_tickers = [
+        ticker for ticker in TICKERS
+        if is_stock_listed(ticker, current_date)
+    ]
 
     if game_state.zoom_comparison_mode:
         draw_comparison_charts_zoomed(screen)
@@ -33,7 +87,6 @@ def draw_ui(screen):
             draw_candle_image(screen, game_state.current_ticker, game_state.time_indices[game_state.current_ticker])
 
     draw_buttons(screen)
-    draw_stock_list(screen)
     draw_portfolio(screen)
     draw_total_profit(screen, game_state.time_indices)
     draw_alerts(screen, game_state.alerts)
@@ -43,8 +96,7 @@ def draw_ui(screen):
     draw_selected_tickers(screen)
     draw_clear_button(screen)
     draw_zoom_button(screen)
-    draw_all_companies_grid(screen)
-    draw_top_10_by_profit(screen)
+    draw_top_10_by_price(screen)
     draw_all_companies_grid(screen)
 
 def draw_buttons(screen):
@@ -77,7 +129,7 @@ def draw_zoom_button(screen):
         return
     rect = pygame.Rect(LAYOUT["zoom"]["x"], LAYOUT["zoom"]["y"], LAYOUT["zoom"]["width"], LAYOUT["zoom"]["height"])
     pygame.draw.rect(screen, (80, 160, 240), rect)
-    draw_text("\U0001f50d Zoom Mode", rect.x + 10, rect.y + 10, (0, 0, 0), screen)
+    draw_text("🔍 Zoom Mode", rect.x + 10, rect.y + 10, (0, 0, 0), screen)
 
 def draw_selected_tickers(screen):
     if not game_state.comparison_mode:
@@ -87,27 +139,6 @@ def draw_selected_tickers(screen):
     for i, ticker in enumerate(game_state.comparison_tickers):
         color = selection_colors[i % len(selection_colors)]
         draw_text(f"{i+1}. {ticker}", x, y + i * 22, color, screen)
-
-def draw_stock_list(screen):
-    y = LAYOUT["stock_list"]["y_start"]
-    current_date = game_state.simulation_date_list[game_state.current_day_index]
-    game_state.visible_tickers.clear()
-
-    for ticker in TICKERS:
-        if not is_stock_listed(ticker, current_date):
-            continue
-        if ticker in game_state.comparison_tickers:
-            idx = game_state.comparison_tickers.index(ticker)
-            rect_color = selection_colors[idx % len(selection_colors)]
-        elif ticker == game_state.current_ticker:
-            rect_color = (0, 0, 255)
-        else:
-            rect_color = (230, 230, 230)
-        pygame.draw.rect(screen, rect_color, (LAYOUT["stock_list"]["x"], y, 150, 35))
-        text_color = (255, 255, 255) if rect_color != (230, 230, 230) else (0, 0, 0)
-        draw_text(ticker, LAYOUT["stock_list"]["x"] + 10, y + 8, text_color, screen)
-        game_state.visible_tickers.append(ticker)
-        y += 40
 
 def draw_portfolio(screen):
     y = LAYOUT["portfolio"]["y_start"]
@@ -127,7 +158,7 @@ def draw_portfolio(screen):
                 draw_text(f"{ticker}: {qty} @ ${price:.2f}", x, y, (255, 255, 255), screen)
                 y += LAYOUT["portfolio"]["line_height"]
             except Exception as e:
-                print(f"\U0001f4cb 포트폴리오 표시 오류: {ticker} - {e}")
+                print(f"📋 포트폴리오 표시 오류: {ticker} - {e}")
 
 def draw_total_profit(screen, time_indices):
     total_invested, total_current_value = 0.0, 0.0
@@ -165,6 +196,76 @@ def draw_alerts(screen, alerts):
         y = LAYOUT["alerts"]["y_base"] + i * LAYOUT["alerts"]["line_height"]
         draw_text(msg, x, y, (255, 255, 0), screen)
 
+def draw_news_history(screen, current_date):
+    if game_state.zoom_comparison_mode:
+        return
+    x, y = LAYOUT["news"]["x"], LAYOUT["news"]["y"]
+    width, max_lines = LAYOUT["news"]["width"], LAYOUT["news"]["max_lines"]
+    pygame.draw.rect(screen, (20, 20, 20), (x, y, width, max_lines * 20 + 10))
+    draw_text("📰 News", x + 5, y + 5, (255, 255, 0), screen)
+    latest_news = game_state.news_log[-max_lines:]
+    for i, item in enumerate(latest_news):
+        draw_text(item["message"], x + 5, y + 30 + i * 18, (255, 255, 255), screen)
+
+def draw_longterm_news(screen, current_date):
+    x, y = LAYOUT["longterm_news"]["x"], LAYOUT["longterm_news"]["y"]
+    draw_text("📢 Persistent Rumors", x, y, (255, 200, 0), screen)
+    for i, line in enumerate(get_persistent_events(current_date)):
+        draw_text(line, x, y + 25 + i * 20, (255, 255, 255), screen)
+
+def draw_top_10_by_price(screen):
+    current_date = game_state.simulation_date_list[game_state.current_day_index]
+    visible_prices = []
+    game_state.top10_button_rects = {}
+    for ticker in TICKERS:
+        ipo = ipo_dates_by_ticker.get(ticker)
+        if ipo and current_date >= ipo:
+            usd_price = current_prices_usd.get(ticker)
+            if usd_price:
+                visible_prices.append((ticker, usd_price))
+
+    sorted_by_price = sorted(visible_prices, key=lambda x: x[1], reverse=True)[:10]
+
+    x, y = LAYOUT["stock_list"]["x"], LAYOUT["stock_list"]["y_start"]
+    for i, (ticker, price) in enumerate(sorted_by_price):
+        rect = pygame.Rect(x, y + i * 40, 150, 35)
+        game_state.top10_button_rects[ticker] = rect  # ✅ 수정: ticker를 key로 사용
+        color = (0, 0, 255) if ticker == game_state.current_ticker else (230, 230, 230)
+        pygame.draw.rect(screen, color, rect)
+        text_color = (255, 255, 255) if color != (230, 230, 230) else (0, 0, 0)
+        draw_text(f"{ticker} ${price:.2f}", rect.x + 10, rect.y + 8, text_color, screen)
+
+def draw_all_companies_grid(screen):
+    tickers = game_state.visible_tickers
+    if not tickers:
+        return
+    max_rows = 5
+    cell_width = 180
+    cell_height = 40
+    padding_x = 10
+    padding_y = 8
+    cols = math.ceil(len(tickers) / max_rows)
+    start_x = 100
+    start_y = LAYOUT["screen"]["height"] - (cell_height + padding_y) * max_rows - 20
+    game_state.grid_button_rects = {}
+    for i, ticker in enumerate(tickers):
+        row = i % max_rows
+        col = i // max_rows
+        x = start_x + col * (cell_width + padding_x)
+        y = start_y + row * (cell_height + padding_y)
+        if ticker == game_state.current_ticker:
+            color = (0, 128, 255)
+        elif ticker in game_state.comparison_tickers:
+            idx = game_state.comparison_tickers.index(ticker)
+            color = selection_colors[idx % len(selection_colors)]
+        else:
+            color = (230, 230, 230)
+        rect = pygame.Rect(x, y, cell_width, cell_height)
+        game_state.grid_button_rects[ticker] = rect
+        pygame.draw.rect(screen, color, rect)
+        text_color = (0, 0, 0) if color == (230, 230, 230) else (255, 255, 255)
+        draw_text(ticker, x + 10, y + 10, text_color, screen)
+
 def draw_candle_image(screen, ticker, index):
     path = draw_candle_chart(ticker, prices_by_ticker, index)
     if os.path.exists(path):
@@ -173,27 +274,7 @@ def draw_candle_image(screen, ticker, index):
             resized = pygame.transform.smoothscale(image, (900, 600))
             screen.blit(resized, (300, 50))
         except Exception as e:
-            print("⚠️ 캔들 이미지 불러오기 실패:", e)
-
-def draw_news_history(screen, current_date):
-    if game_state.zoom_comparison_mode:
-        return  # 확대 모드에서는 뉴스 미표시
-    x, y = LAYOUT["news"]["x"], LAYOUT["news"]["y"]
-    width, max_lines = LAYOUT["news"]["width"], LAYOUT["news"]["max_lines"]
-    pygame.draw.rect(screen, (20, 20, 20), (x, y, width, max_lines * 20 + 10))
-    draw_text("\U0001f4f0 News", x + 5, y + 5, (255, 255, 0), screen)
-
-    # ✅ 최근 N개 뉴스 출력 (최근 순서로)
-    latest_news = game_state.news_log[-max_lines:]
-    for i, item in enumerate(latest_news):
-        draw_text(item["message"], x + 5, y + 30 + i * 18, (255, 255, 255), screen)
-
-
-def draw_longterm_news(screen, current_date):
-    x, y = LAYOUT["longterm_news"]["x"], LAYOUT["longterm_news"]["y"]
-    draw_text("\U0001f4e2 Persistent Rumors", x, y, (255, 200, 0), screen)
-    for i, line in enumerate(get_persistent_events(current_date)):
-        draw_text(line, x, y + 25 + i * 20, (255, 255, 255), screen)
+            print("⚠️ 캔들 이미지 로딩 실패:", e)
 
 def draw_comparison_charts_candlestick(screen):
     tickers = game_state.comparison_tickers
@@ -238,72 +319,3 @@ def draw_comparison_charts_zoomed(screen):
                 start_y += chart_height + padding
             except Exception as e:
                 print(f"⚠️ 확대 차트 로딩 실패 ({ticker}): {e}")
-
-import math
-
-def draw_all_companies_grid(screen):
-
-    tickers = game_state.visible_tickers
-    if not tickers:
-        return
-
-    # 💡 레이아웃 설정
-    max_rows = 5
-    cell_width = 180
-    cell_height = 40
-    padding_x = 10
-    padding_y = 8
-
-    cols = math.ceil(len(tickers) / max_rows)
-
-    # ✅ 시작 위치: 화면 맨 아래로부터 위로 올라오게
-    start_x = 100  # 좌측 여백
-    start_y = LAYOUT["screen"]["height"] - (cell_height + padding_y) * max_rows - 20
-
-    game_state.grid_button_rects = {}
-
-    for i, ticker in enumerate(tickers):
-        row = i % max_rows
-        col = i // max_rows
-
-        x = start_x + col * (cell_width + padding_x)
-        y = start_y + row * (cell_height + padding_y)
-
-        # 선택 색상 처리
-        if ticker == game_state.current_ticker:
-            color = (0, 128, 255)
-        elif ticker in game_state.comparison_tickers:
-            idx = game_state.comparison_tickers.index(ticker)
-            color = selection_colors[idx % len(selection_colors)]
-        else:
-            color = (230, 230, 230)
-
-        pygame.draw.rect(screen, color, (x, y, cell_width, cell_height))
-        text_color = (0, 0, 0) if color == (230, 230, 230) else (255, 255, 255)
-        rect = pygame.Rect(x, y, cell_width, cell_height)
-        game_state.grid_button_rects[ticker] = rect
-        pygame.draw.rect(screen, color, rect)
-        draw_text(ticker, x + 10, y + 10, text_color, screen)
-
-def draw_top_10_by_profit(screen):
-    profit_list = []
-    for ticker, data in game_state.portfolio["stocks"].items():
-        qty = data["quantity"]
-        if f"{ticker}_Close" in prices_by_ticker and game_state.time_indices.get(ticker) is not None:
-            try:
-                buy_price = data["buy_price"]
-                current_price = prices_by_ticker[f"{ticker}_Close"][game_state.time_indices[ticker]]
-                if qty > 0 or buy_price > 0:
-                    profit = ((current_price - buy_price) / buy_price) if buy_price else 0
-                    profit_list.append((ticker, profit))
-            except:
-                continue
-
-    sorted_list = sorted(profit_list, key=lambda x: x[1], reverse=True)[:10]
-
-    x, y = LAYOUT["stock_list"]["x"], LAYOUT["stock_list"]["y_start"]
-    for i, (ticker, profit) in enumerate(sorted_list):
-        color = (0, 0, 255) if ticker == game_state.current_ticker else (230, 230, 230)
-        pygame.draw.rect(screen, color, (x, y + i * 40, 150, 35))
-        text_color = (255, 255, 255) if color != (230, 230, 230) else (0, 0, 0)
-        draw_text(f"{ticker}", x + 10, y + i * 40 + 8, text_color, screen)
