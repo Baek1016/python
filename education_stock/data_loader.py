@@ -5,12 +5,12 @@ import pandas as pd
 import yfinance as yf
 from constants import TICKERS
 
-# 전역 변수
+# 해당 전역 변수에 필요한 데이터 저장
 prices_by_ticker = {}
 volumes_by_ticker = {}
 dates_by_ticker = {}
-ipo_dates_by_ticker = {}  # 📌 상장일 저장
-current_prices_usd = {}   # 💵 달러 기준 현재 가격
+ipo_dates_by_ticker = {}
+current_prices_usd = {}
 
 CACHE_DIR = "cache"
 if not os.path.exists(CACHE_DIR):
@@ -22,13 +22,20 @@ def get_exchange_rates(base="USD"):
         url = f"https://api.exchangerate.host/latest?base={base}"
         response = requests.get(url, timeout=3)
         data = response.json()
-        if "rates" not in data:
-            raise ValueError("Missing 'rates' in API response")
-        return data["rates"]
+        rates = data.get("rates", {})
+        if not rates:
+            raise ValueError("Missing or empty 'rates' in API response")
+        return rates
     except Exception as e:
-        print("⚠ 환율 정보 가져오기 실패:", e)
+        print("⚠ 확율 정보 가져오기 실패:", e)
         return {
-            "KRW": 1300, "JPY": 150, "EUR": 0.9, "GBP": 0.78, "INR": 83.0
+            "KRW": 1300,
+            "JPY": 150,
+            "EUR": 0.9,
+            "GBP": 0.78,
+            "INR": 83.0,
+            "HKD": 7.8,
+            "USD": 1.0
         }
 
 def get_country_from_ticker(ticker):
@@ -60,13 +67,13 @@ def calculate_current_prices_usd(simulation_date_list=None):
         price_list = prices_by_ticker[key]
 
         try:
-            if price_list:
-                index = len(simulation_date_list) - 1 if simulation_date_list else -1
+            index = min(len(price_list), len(simulation_date_list)) - 1 if simulation_date_list else len(price_list) - 1
+            if index >= 0:
                 current_price = price_list[index]
                 usd_price = round(current_price / rate, 2)
                 current_prices_usd[ticker] = usd_price
         except Exception as e:
-            print(f"⚠️ {ticker} 환산 중 오류: {e}")
+            print(f"⚠️ {ticker} 환상 중 오류: {e}")
 
 def get_stock_data(ticker, start_date, end_date, retries=3):
     cache_file = os.path.join(CACHE_DIR, f"{ticker}.csv")
@@ -75,13 +82,10 @@ def get_stock_data(ticker, start_date, end_date, retries=3):
     if os.path.exists(cache_file):
         try:
             df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-            df.index = pd.to_datetime(df.index)
-            if hasattr(df.index, "tz") and df.index.tz is not None:
-                df.index = df.index.tz_convert("UTC").tz_localize(None)
-
+            df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)  # ✔ tz-aware 해결
             if df.empty or not all(col in df.columns for col in required_cols):
                 raise ValueError("Invalid cache file")
-            print(f"📁 캐시 사용: {ticker}")
+            print(f"파일 재사용: {ticker}")
             return df
         except Exception as e:
             print(f"⚠ 캐시 파일 오류: {ticker} → {e}")
@@ -89,19 +93,17 @@ def get_stock_data(ticker, start_date, end_date, retries=3):
 
     for attempt in range(1, retries + 1):
         try:
-            print(f"📡 다운로드 중: {ticker} (시도 {attempt})")
+            print(f"다운로드: {ticker} (실행 {attempt})")
             df = yf.Ticker(ticker).history(start=start_date, end=end_date)
             df.columns = [c.lower() for c in df.columns]
             df = df[required_cols].dropna().astype({"volume": int})
-
             if df.empty:
                 print(f"⚠ {ticker} 데이터 없음")
                 return pd.DataFrame()
-
             df.to_csv(cache_file)
             return df
         except Exception as e:
-            print(f"❌ {ticker} 다운로드 실패 (시도 {attempt}): {e}")
+            print(f"❌ {ticker} 다운로드 실패: {e}")
             time.sleep(1)
 
     return pd.DataFrame()
@@ -115,13 +117,10 @@ def download_all_stock_data(tickers, start_date="2000-01-01", end_date=None):
     for ticker in tickers:
         df = get_stock_data(ticker, start_date, end_date)
         if df.empty:
-            print(f"⚠ {ticker} 데이터 없음 → 건너뜀")
+            print(f"⚠ {ticker} 데이터 없음 → 건너보기")
             continue
 
-        df.index = pd.to_datetime(df.index)
-        if df.index.tz is not None:
-            df.index = df.index.tz_convert("UTC").tz_localize(None)
-
+        df.index = pd.to_datetime(df.index, utc=True).tz_localize(None)
         date_list = df.index.date.tolist()
 
         prices_by_ticker[f"{ticker}_Open"] = df["open"].tolist()
@@ -135,8 +134,8 @@ def download_all_stock_data(tickers, start_date="2000-01-01", end_date=None):
         all_dates_set.update(date_list)
 
     simulation_dates = sorted(all_dates_set)
-    print("✅ 데이터 다운로드 완료")
-    print(f"📊 시뮬레이션 날짜 수: {len(simulation_dates)}")
+    print("현재 데이터 다운로드 완료")
+    print(f"\n할 데이터 수: {len(simulation_dates)}")
     return simulation_dates
 
 def clear_cache():
@@ -145,7 +144,7 @@ def clear_cache():
         if fname.endswith(".csv"):
             os.remove(os.path.join(CACHE_DIR, fname))
             deleted += 1
-    print(f"🗑️ 캐시 {deleted}개 삭제됨")
+    print(f"❌ 캐시 파일 {deleted}개 삭제됨")
 
 __all__ = [
     "get_exchange_rates",

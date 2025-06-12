@@ -19,7 +19,7 @@ fixed_events = [
     }
 ]
 
-# ✅ 장기 유지되는 루머성 뉴스
+# ✅ 장기 유지되는 루머성 뉴스 (고정 + 자동 생성)
 persistent_events = [
     {
         "ticker": "MSFT",
@@ -30,12 +30,37 @@ persistent_events = [
     }
 ]
 
+# ✅ 자동 생성된 루머 저장소
+auto_persistent_rumors = []
+
 # ✅ 랜덤 뉴스 이벤트 리스트
 random_events = []
+
+def generate_persistent_rumors(ticker, date):
+    """랜덤 확률로 특정 티커에 대한 장기 루머 생성"""
+    if random.random() < 0.05:  # 5% 확률로 생성
+        rumor_templates = [
+            "{} rumored to launch innovative product",
+            "{} may face antitrust investigation",
+            "{} planning large-scale layoffs",
+            "{} reported internal power struggle",
+            "{} seen as next takeover target"
+        ]
+        template = random.choice(rumor_templates)
+        title = template.format(ticker)
+        rumor = {
+            "ticker": ticker,
+            "title": title,
+            "impact": 0.0,  # 시각적 루머만 (가격 영향 없음)
+            "start_date": date,
+            "end_date": date + datetime.timedelta(days=7)
+        }
+        auto_persistent_rumors.append(rumor)
 
 def schedule_random_events(tickers, simulation_dates):
     """
     각 종목마다 달에 1개 이상 랜덤 뉴스 이벤트 생성
+    + 일정 확률로 루머성 뉴스 자동 생성
     """
     global random_events
     random_events = []
@@ -75,6 +100,9 @@ def schedule_random_events(tickers, simulation_dates):
                 "message": message
             })
 
+            # ✅ 루머도 일정 확률로 생성
+            generate_persistent_rumors(ticker, chosen_date)
+
 def get_events_for_date(date):
     """해당 날짜에 발생하는 모든 고정 + 랜덤 뉴스 반환"""
     results = []
@@ -101,9 +129,9 @@ def get_events_for_date(date):
     return results
 
 def get_persistent_events(current_date):
-    """지속 노출되어야 하는 뉴스 이벤트 목록 반환"""
+    """지속 노출되어야 하는 뉴스 이벤트 목록 반환 (고정 + 자동 루머 포함)"""
     results = []
-    for event in persistent_events:
+    for event in persistent_events + auto_persistent_rumors:
         if event["start_date"] <= current_date <= event["end_date"]:
             results.append(f"📌 {event['ticker']} - {event['title']}")
     return results

@@ -9,9 +9,9 @@ SCREEN_HEIGHT = 1280
 # ✅ TICKERS (전세계 주식)
 TICKERS = {
     # 미국
-    'AAPL': 'Apple', 'GOOG': 'Google', 
-    'TSLA': 'Tesla', 'MSFT': 'Microsoft', 
-    'AMZN': 'Amazon','META': 'Meta', 
+    'AAPL': 'Apple (US)', 'GOOG': 'Google (US)', 
+    'TSLA': 'Tesla (US)', 'MSFT': 'Microsoft (US)', 
+    'AMZN': 'Amazon (US)', 'META': 'Meta (US)',
     # 'NFLX': 'Netflix', 'NVDA': 'Nvidia', 
     # 'INTC': 'Intel', 'AMD': 'AMD',
     # 'DIS': 'Disney', 'IBM': 'IBM', 
@@ -25,12 +25,12 @@ TICKERS = {
     # 'V': 'Visa', 
     # 'MA': 'Mastercard',
 
-    # 한국
-    '005930.KS': 'Samsung Electronics', 
-    '066570.KS': 'LG Electronics',
-    '005380.KS': 'Hyundai Motor', 
-    '035420.KS': 'Naver', 
-    '035720.KS': 'Kakao',
+    # 한국 (KR)
+    '005930.KS': 'Samsung Electronics (KR)', 
+    '066570.KS': 'LG Electronics (KR)',
+    '005380.KS': 'Hyundai Motor (KR)', 
+    '035420.KS': 'Naver (KR)', 
+    '035720.KS': 'Kakao (KR)',
 
     # 홍콩
     '9988.HK': 'Alibaba',

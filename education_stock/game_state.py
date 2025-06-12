@@ -1,22 +1,21 @@
-#game_state.py
+# game_state.py
 import datetime
 import time
 import pygame
 import sys
-from constants import TICKERS, LAYOUT
 import os
-
-
+from constants import TICKERS, LAYOUT
 from data_loader import (
     download_all_stock_data,
     prices_by_ticker,
     dates_by_ticker,
     ipo_dates_by_ticker,
-    calculate_current_prices_usd  # ✅ 환율 기반 현재가 추가
+    calculate_current_prices_usd
 )
 from profit_tracker import calculate_total_profit, plot_profit_history
 from events import schedule_random_events, get_events_for_date
 from portfolio_manager import buy_stock, sell_stock
+from save_manager import load_game, delete_game
 
 # 전역 상태 정의
 game_mode = "menu"
@@ -26,7 +25,7 @@ current_ticker = None
 time_indices = {}
 portfolio = {}
 alerts = []
-visible_tickers = [] 
+visible_tickers = []
 news_log = []
 
 screen = pygame.display.set_mode((2000, 1280))
@@ -38,18 +37,9 @@ zoom_comparison_mode = False
 input_mode = None
 input_text = ""
 load_file_buttons = []
-
+selected_save_file = None
 profit_history = []
 
-game_mode = "menu"  # 시작 시 메뉴 모드 (menu, play, load)
-
-selected_save_file = None
-load_file_buttons = []
-input_mode = None
-input_text = ""
-
-
-# ✅ 선택 색상 정의
 selection_colors = [(0, 0, 255), (0, 128, 0), (255, 0, 0), (128, 0, 128)]
 
 zoom_scroll_offset = 0
@@ -58,9 +48,13 @@ dragging = False
 last_mouse_pos = (0, 0)
 
 zoom_levels = [0.5, 0.8, 1.0, 1.5, 2.0]
-zoom_level_index = 2  # 기본은 1.0배
-grid_button_rects = {} 
-top10_button_rects = {}  # 좌측 순위 버튼 rect → ticker 매핑용
+zoom_level_index = 2
+
+grid_button_rects = {}
+top10_button_rects = {}
+
+day_duration = 10  # 하루 진행에 10초 사용
+day_start_time = None  # 초기엔 None으로 둔다
 
 def init_game():
     global simulation_date_list, current_ticker, time_indices, portfolio, game_mode
@@ -72,9 +66,9 @@ def init_game():
         print("❌ 날짜 리스트 없음 → 게임 시작 불가")
         sys.exit()
 
-    print(f"✅ 총 시뮬리언 날짜 수: {len(simulation_date_list)}")
-    print(f"🗅️ 시작일: {simulation_date_list[0]}")
-    print(f"🗅️ 종료일: {simulation_date_list[-1]}")
+    print(f"✅ 총 시무리언 날짜 수: {len(simulation_date_list)}")
+    print(f"🗕️ 시작일: {simulation_date_list[0]}")
+    print(f"🗕️ 종료일: {simulation_date_list[-1]}")
 
     portfolio.update({
         "cash": 100000.0,
@@ -89,17 +83,26 @@ def init_game():
             break
 
     schedule_random_events(list(TICKERS.keys()), simulation_date_list)
-    calculate_current_prices_usd()  # ✅ 현재가 계산
+    calculate_current_prices_usd(simulation_date_list)
     game_mode = "playing"
 
 def main_loop(screen):
+    from ui_drawer import draw_load_file_buttons
     global current_day_index, input_mode, input_text, zoom_scroll_offset, zoom_level_index, dragging, last_mouse_pos
-
     clock = pygame.time.Clock()
     running = True
+    global day_start_time  # 전역 변수 사용 명시
+    if day_start_time is None:
+        day_start_time = time.time()
 
     while running:
         screen.fill((0, 0, 0))
+
+        if game_mode == "load_menu":
+            draw_load_file_buttons(screen)
+            pygame.display.flip()
+            clock.tick(5)
+            continue
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -135,17 +138,41 @@ def main_loop(screen):
                         input_text += event.unicode
                 elif event.key == pygame.K_ESCAPE and zoom_comparison_mode:
                     toggle_zoom_mode()
-            elif event.type == pygame.VIDEORESIZE:
-                screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
-                LAYOUT["screen"]["width"] = event.w
-                LAYOUT["screen"]["height"] = event.h
+                elif event.type == pygame.VIDEORESIZE:
+                    screen = pygame.display.set_mode((event.w, event.h), pygame.RESIZABLE)
+                    LAYOUT["screen"]["width"] = event.w
+                    LAYOUT["screen"]["height"] = event.h
 
+                elif event.key == pygame.K_s and pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                    input_mode = "save"
+                    input_text = ""
+
+        # 반복문 안에서 시간 흐름 제어
         if game_mode == "playing":
-            current_day_index += 1
-            if current_day_index >= len(simulation_date_list):
-                print("🗅️ 모든 날짜 종료")
-                break
+            current_date = simulation_date_list[current_day_index]
 
+            # 거래일이 아닌 경우 바로 넘김
+            if not any(current_date == d for d in dates_by_ticker.get(current_ticker, [])):
+                current_day_index += 1
+                day_start_time = time.time()  # 새로운 날 시작
+                continue
+            
+            # 아직 10초가 안 지났으면 대기
+            if time.time() - day_start_time < day_duration:
+                from ui_drawer import draw_ui
+                draw_ui(screen)
+                pygame.display.flip()
+                clock.tick(30)
+                continue  # 하루 대기 중
+            
+            # 10초가 지난 경우 실제 하루 진행
+            current_day_index += 1
+            day_start_time = time.time()  # 다음 날 시작
+
+            if current_day_index >= len(simulation_date_list):
+                print("🗕️ 모든 날짜 종료")
+                break
+            
             current_date = simulation_date_list[current_day_index]
             apply_news_events(current_date, current_day_index)
 
@@ -157,6 +184,7 @@ def main_loop(screen):
             profit_history.append(total_profit)
             plot_profit_history(profit_history)
 
+
         from ui_drawer import draw_ui
         draw_ui(screen)
 
@@ -165,6 +193,20 @@ def main_loop(screen):
 
 def handle_mouse_click(pos):
     x, y = pos
+    global selected_save_file, game_mode
+
+    if game_mode == "load_menu":
+        for filename, load_btn, del_btn in load_file_buttons:
+            if load_btn.collidepoint(pos):
+                print(f"📅 로드 시도: {filename}")
+                data = load_game(filename)
+                load_game_data_into_state(data)
+                game_mode = "playing"
+            elif del_btn.collidepoint(pos):
+                print(f"🗑 삭제 시도: {filename}")
+                delete_game(filename)
+        return
+
     current_date = simulation_date_list[current_day_index]
 
     for ticker, rect in grid_button_rects.items():
@@ -215,7 +257,7 @@ def handle_button_click(pos):
     clear_btn_rect = pygame.Rect(230, 20, 160, 30)
     if clear_btn_rect.collidepoint(x, y) and comparison_mode:
         comparison_tickers.clear()
-        print("🪹 선택 초기화")
+        print("🩹 선택 초기화")
 
     zoom_btn_rect = pygame.Rect(
         LAYOUT["zoom"]["x"], LAYOUT["zoom"]["y"],
@@ -255,3 +297,14 @@ def toggle_ticker_selection(ticker):
     else:
         if len(comparison_tickers) < 4:
             comparison_tickers.append(ticker)
+
+def load_game_data_into_state(data):
+    global simulation_date_list, current_day_index, current_ticker, time_indices, portfolio, alerts, news_log, profit_history
+    simulation_date_list = data["simulation_date_list"]
+    current_day_index = data["current_day_index"]
+    current_ticker = data["current_ticker"]
+    time_indices = data["time_indices"]
+    portfolio = data["portfolio"]
+    alerts = []
+    news_log = data.get("news_log", [])
+    profit_history = data.get("profit_history", [])
